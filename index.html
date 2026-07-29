@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BBDown Web</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:14px/1.6 system-ui,-apple-system,sans-serif;background:#0f1117;color:#c9d1d9;max-width:820px;margin:0 auto;padding:20px}
+h1{font-size:20px;margin-bottom:20px;color:#58a6ff}
+.card{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:16px;margin-bottom:12px}
+input,button,select{font:inherit}
+input[type="text"],input[type="number"]{width:100%;padding:8px 12px;border:1px solid #30363d;border-radius:6px;background:#0d1117;color:#c9d1d9;outline:none}
+input:focus{border-color:#58a6ff}
+select{padding:6px 10px;border:1px solid #30363d;border-radius:6px;background:#0d1117;color:#c9d1d9;outline:none;cursor:pointer}
+select:focus{border-color:#58a6ff}
+button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:500}
+.btn-primary{background:#238636;color:#fff}
+.btn-primary:hover{background:#2ea043}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-danger{background:#da3633;color:#fff}
+.btn-danger:hover{background:#f85149}
+.btn-danger:disabled{opacity:.4;cursor:not-allowed}
+.btn-outline{padding:4px 10px;font-size:12px;background:transparent;border:1px solid #30363d;color:#c9d1d9}
+.btn-outline:hover{border-color:#58a6ff;color:#58a6ff}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:4px}
+.flex1{flex:1}
+
+#meta{margin-top:12px}
+#meta .title{font-size:16px;font-weight:600;color:#fff}
+#meta .sub{color:#8b949e;font-size:12px}
+
+.stream-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.stream-item{border:1px solid #30363d;border-radius:6px;padding:10px;cursor:pointer;transition:.15s}
+.stream-item:hover{border-color:#58a6ff}
+.stream-item.selected{border-color:#238636;background:#0d2818}
+.stream-item .q{font-weight:600;font-size:13px;color:#fff}
+.stream-item .d{font-size:11px;color:#8b949e;margin-top:2px}
+
+.section-label{font-size:12px;font-weight:600;color:#8b949e;text-transform:uppercase;margin-bottom:6px;letter-spacing:.5px}
+.section-label a{color:#58a6ff;text-decoration:none;font-weight:400;margin-left:8px;text-transform:none;letter-spacing:0}
+
+/* mode selector */
+.mode-row{display:flex;gap:4px;flex-wrap:wrap}
+.mode-btn{position:relative;padding:6px 12px;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px;transition:.15s;background:#0d1117;color:#8b949e}
+.mode-btn:hover{border-color:#8b949e;color:#c9d1d9}
+.mode-btn.selected{border-color:#58a6ff;color:#58a6ff;background:#0d2818}
+.mode-btn input{position:absolute;opacity:0;pointer-events:none}
+
+/* page selector */
+.page-checks{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.page-chip{display:flex;align-items:center;gap:4px;padding:3px 8px;border:1px solid #30363d;border-radius:4px;font-size:12px;cursor:pointer;user-select:none}
+.page-chip:hover{border-color:#8b949e}
+.page-chip input{width:auto}
+.page-chip.checked{border-color:#238636;color:#7ee787}
+
+/* progress */
+.progress-bar{width:100%;height:6px;background:#30363d;border-radius:3px;overflow:hidden;margin:8px 0}
+.progress-bar .fill{height:100%;background:#238636;transition:width .2s}
+#log{max-height:200px;overflow-y:auto;font:12px/1.5 Consolas,monospace;color:#8b949e;background:#0d1117;padding:8px;border-radius:4px;margin-top:8px}
+
+/* advanced */
+.adv-toggle{cursor:pointer;font-size:12px;color:#58a6ff;user-select:none;display:inline-block;margin-top:8px}
+.adv-toggle:hover{color:#79c0ff}
+.adv-panel{border:1px solid #30363d;border-radius:6px;padding:12px;margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.adv-panel .full{grid-column:1/-1}
+.adv-panel label{font-size:12px;color:#8b949e;display:block;margin-bottom:2px}
+.adv-panel input[type="text"],.adv-panel input[type="number"]{padding:5px 8px;font-size:12px}
+
+/* file list */
+.file-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #30363d22;gap:8px}
+.file-row .fn{font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-row .sz{font-size:12px;color:#8b949e;white-space:nowrap}
+.file-row a{color:#58a6ff;text-decoration:none;font-size:12px}
+.file-row a:hover{color:#79c0ff}
+.file-row .ext-tag{font-size:10px;padding:1px 5px;border-radius:3px;font-weight:500;white-space:nowrap}
+.ext-video{background:#1a3a2a;color:#7ee787}
+.ext-audio{background:#1a2a3a;color:#79c0ff}
+.ext-sub{background:#3a2a1a;color:#d2a66e}
+.ext-other{background:#1a1a2a;color:#8b949e}
+
+/* login */
+#qrWrap{text-align:center;padding:10px}
+#qrWrap img{width:200px;height:200px;border-radius:8px;border:2px solid #30363d}
+#qrWrap .hint{font-size:13px;color:#8b949e;margin-top:8px}
+#loginBar{display:flex;align-items:center;gap:12px}
+#loginBar .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+#loginBar .dot.ok{background:#238636}
+#loginBar .dot.no{background:#da3633}
+
+.hidden{display:none}
+.check-label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.check-label input{width:auto}
+.check-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+</style>
+</head>
+<body>
+
+<h1>BBDown Web</h1>
+
+<!-- ===== LOGIN ===== -->
+<div class="card">
+  <div id="loginBar">
+    <span style="font-weight:600;font-size:13px">登录</span>
+    <span class="dot no" id="loginDot"></span>
+    <span id="loginText" style="font-size:13px">未登录</span>
+    <button class="btn-sm btn-primary" id="btnLogin" style="margin-left:auto">扫码登录</button>
+    <button class="btn-sm btn-outline" id="btnLoginTv">TV登录</button>
+    <button class="btn-sm btn-danger hidden" id="btnCancelLogin">取消</button>
+  </div>
+  <div id="qrWrap" class="hidden">
+    <img id="qrImg" src="" alt="QR Code">
+    <div class="hint">打开B站APP扫描二维码</div>
+  </div>
+</div>
+
+<!-- ===== PARSE ===== -->
+<div class="card">
+  <div class="row" style="margin-bottom:8px">
+    <input type="text" id="url" placeholder="粘贴B站视频链接 (BV号/AV号/EP号/SS号)" autofocus style="flex:1">
+    <select id="apiMode" style="width:80px">
+      <option value="">WEB</option>
+      <option value="tv">TV</option>
+      <option value="app">APP</option>
+      <option value="intl">INTL</option>
+    </select>
+    <button class="btn-primary" id="btnParse">解析</button>
+  </div>
+  <div id="meta" class="hidden"></div>
+  <div id="pageSelector" class="hidden" style="margin-top:8px">
+    <div class="section-label">分P选择 <a href="#" id="selAll">全选</a> <a href="#" id="selNone">取消</a></div>
+    <div id="pageChecks" class="page-checks"></div>
+  </div>
+</div>
+
+<!-- ===== DOWNLOAD ===== -->
+<div id="selector" class="card hidden">
+  <!-- download mode -->
+  <div class="section-label">下载模式</div>
+  <div class="mode-row" id="modeRow">
+    <label class="mode-btn selected"><input type="radio" name="dlMode" value="" checked>视频+音频</label>
+    <label class="mode-btn"><input type="radio" name="dlMode" value="video">仅视频</label>
+    <label class="mode-btn"><input type="radio" name="dlMode" value="audio">仅音频</label>
+    <label class="mode-btn"><input type="radio" name="dlMode" value="danmaku">仅弹幕</label>
+    <label class="mode-btn"><input type="radio" name="dlMode" value="sub">仅字幕</label>
+    <label class="mode-btn"><input type="radio" name="dlMode" value="cover">仅封面</label>
+  </div>
+
+  <!-- video streams -->
+  <div id="videoSection" style="margin-top:12px">
+    <div class="section-label">视频画质 & 编码</div>
+    <div id="videoStreams" class="stream-grid"></div>
+  </div>
+
+  <!-- audio streams -->
+  <div id="audioSection" style="margin-top:12px">
+    <div class="section-label">音频质量</div>
+    <div id="audioStreams" class="stream-grid"></div>
+  </div>
+
+  <!-- extra options -->
+  <div id="extraOpts" class="check-row">
+    <label class="check-label"><input type="checkbox" id="danmaku"> 同时下载弹幕</label>
+  </div>
+
+  <!-- advanced toggle -->
+  <div class="adv-toggle" id="advToggle">▶ 高级设置</div>
+  <div class="adv-panel hidden" id="advPanel">
+    <div>
+      <label>文件名模板</label>
+      <input type="text" id="filePattern" placeholder="&lt;videoTitle&gt;">
+    </div>
+    <div>
+      <label>多P文件名模板</label>
+      <input type="text" id="multiFilePattern" placeholder="&lt;videoTitle&gt;/[P&lt;pageNumberWithZero&gt;]&lt;pageTitle&gt;">
+    </div>
+    <div>
+      <label>语言代码 (如 chi, jpn)</label>
+      <input type="text" id="language" placeholder="默认">
+    </div>
+    <div>
+      <label>分P下载间隔 (秒)</label>
+      <input type="number" id="delayPerPage" value="0" min="0" style="width:100px">
+    </div>
+    <div>
+      <label>User-Agent</label>
+      <input type="text" id="userAgent" placeholder="随机UA">
+    </div>
+    <div>
+      <label>Cookie 字符串</label>
+      <input type="text" id="cookie" placeholder="手动填入cookie">
+    </div>
+    <div class="full check-row" style="gap:12px">
+      <label class="check-label"><input type="checkbox" id="videoAsc"> 视频升序(最小优先)</label>
+      <label class="check-label"><input type="checkbox" id="audioAsc"> 音频升序(最小优先)</label>
+      <label class="check-label"><input type="checkbox" id="skipMux"> 跳过混流</label>
+      <label class="check-label"><input type="checkbox" id="skipSub"> 跳过字幕</label>
+      <label class="check-label"><input type="checkbox" id="skipCover"> 跳过封面</label>
+      <label class="check-label"><input type="checkbox" id="allowPcdn"> 允许PCDN</label>
+      <label class="check-label"><input type="checkbox" id="saveArchives"> 存档记录(跳过重复)</label>
+    </div>
+  </div>
+
+  <!-- download button + progress -->
+  <div class="row" style="margin-top:12px">
+    <button class="btn-primary" id="btnDownload" disabled>开始下载</button>
+    <span id="dlStatus" style="font-size:13px;color:#8b949e"></span>
+  </div>
+  <div class="progress-bar hidden" id="progressWrap"><div class="fill" id="progressFill" style="width:0%"></div></div>
+  <div id="log" class="hidden"></div>
+</div>
+
+<!-- ===== FILES ===== -->
+<div class="card">
+  <div class="section-label">已下载文件</div>
+  <div id="fileList">加载中...</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s)
+const $$ = s => document.querySelectorAll(s)
+
+let videoInfo = null
+let selVideoIdx = null
+let selAudioIdx = null
+let loginPoll = null, loginType = 'web'
+
+// ========== LOGIN ==========
+async function checkLogin() {
+  try {
+    const r = await fetch('/api/login/status')
+    const d = await r.json()
+    if (d.loggedIn) {
+      $('#loginDot').className = 'dot ok'
+      $('#loginText').textContent = '已登录'
+      $('#btnLogin').textContent = '重新登录'
+    } else if (d.loginInProgress) {
+      $('#loginDot').className = 'dot no'
+      $('#loginText').textContent = '等待扫码...'
+    } else {
+      $('#loginDot').className = 'dot no'
+      $('#loginText').textContent = '未登录'
+    }
+    return d
+  } catch (_) { return {} }
+}
+
+function startLogin(type) {
+  return async () => {
+    loginType = type
+    $('#btnLogin').disabled = true; $('#btnLoginTv').disabled = true
+    $('#btnLogin').textContent = '生成中...'; $('#btnLoginTv').textContent = '生成中...'
+    $('#qrWrap').classList.remove('hidden')
+    $('#qrImg').src = ''
+
+    try {
+      const r = await fetch('/api/login/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type}) })
+      const d = await r.json()
+      if (d.ok) {
+        $('#qrImg').src = '/api/qrcode?t=' + Date.now()
+        $('#loginText').textContent = '等待扫码...'
+        $('#btnCancelLogin').classList.remove('hidden')
+        $('#btnLogin').classList.add('hidden'); $('#btnLoginTv').classList.add('hidden')
+
+        const poll = setInterval(async () => {
+          const s = await checkLogin()
+          if (s.loggedIn) {
+            clearInterval(poll)
+            endLoginUI()
+            $('#loginText').textContent = '已登录 ✓'
+            setTimeout(() => { if ($('#loginText').textContent === '已登录 ✓') $('#loginText').textContent = '已登录' }, 3000)
+          }
+        }, 2000)
+        $('#btnCancelLogin').dataset.pollId = poll
+      } else {
+        alert('启动失败')
+        endLoginUI()
+      }
+    } catch (e) {
+      alert('登录失败: ' + e.message)
+      endLoginUI()
+    }
+  }
+}
+
+function endLoginUI() {
+  $('#qrWrap').classList.add('hidden')
+  $('#btnCancelLogin').classList.add('hidden')
+  $('#btnLogin').classList.remove('hidden'); $('#btnLoginTv').classList.remove('hidden')
+  $('#btnLogin').disabled = false; $('#btnLoginTv').disabled = false
+  $('#btnLogin').textContent = '扫码登录'; $('#btnLoginTv').textContent = 'TV登录'
+}
+
+$('#btnLogin').onclick = startLogin('web')
+$('#btnLoginTv').onclick = startLogin('tv')
+
+$('#btnCancelLogin').onclick = () => {
+  const poll = $('#btnCancelLogin').dataset.pollId
+  if (poll) clearInterval(+poll)
+  endLoginUI()
+  $('#loginText').textContent = '未登录'
+}
+
+// ========== PARSE ==========
+$('#btnParse').onclick = async () => {
+  const url = $('#url').value.trim()
+  if (!url) return
+  $('#btnParse').disabled = true; $('#btnParse').textContent = '解析中...'
+  $('#meta').classList.add('hidden'); $('#selector').classList.add('hidden')
+  try {
+    const body = { url, apiMode: $('#apiMode').value }
+    const r = await fetch('/api/info', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    const data = await r.json()
+    if (data.error) throw new Error(data.error)
+    videoInfo = data
+    renderMeta(data)
+    renderStreams(data)
+    renderPages(data)
+    $('#selector').classList.remove('hidden')
+    $('#btnDownload').disabled = false
+  } catch (e) {
+    alert('解析失败: ' + e.message)
+  } finally {
+    $('#btnParse').disabled = false; $('#btnParse').textContent = '解析'
+  }
+}
+
+function renderMeta(d) {
+  $('#meta').classList.remove('hidden')
+  let html = `<div class="title">${esc(d.title)}</div>`
+  html += `<div class="sub">${esc(d.upHome)} · ${esc(d.date)}</div>`
+  html += `<div class="sub" style="margin-top:2px">视频流: ${d.videoStreams.length}个 · 音频流: ${d.audioStreams.length}个 · 分P: ${d.pages.length}个</div>`
+  if (d.cmd) html += `<div class="sub" style="margin-top:2px;font-size:10px;opacity:0.5">${esc(d.cmd)}</div>`
+  $('#meta').innerHTML = html
+}
+
+function renderPages(d) {
+  if (d.pages.length <= 1) { $('#pageSelector').classList.add('hidden'); return }
+  $('#pageSelector').classList.remove('hidden')
+  $('#pageChecks').innerHTML = d.pages.map(p => `
+    <label class="page-chip checked"><input type="checkbox" value="${p.index}" checked>P${p.index} ${esc(p.title)}</label>
+  `).join('')
+  $('#selAll').onclick = e => { e.preventDefault(); $$('#pageChecks input').forEach(c => { c.checked = true; c.parentElement.classList.add('checked') }) }
+  $('#selNone').onclick = e => { e.preventDefault(); $$('#pageChecks input').forEach(c => { c.checked = false; c.parentElement.classList.remove('checked') }) }
+  $$('#pageChecks input').forEach(c => c.onchange = () => c.parentElement.classList.toggle('checked', c.checked))
+}
+
+function renderStreams(d) {
+  selVideoIdx = d.videoStreams.length > 0 ? 0 : null
+  selAudioIdx = d.audioStreams.length > 0 ? 0 : null
+  $('#videoStreams').innerHTML = d.videoStreams.map((s, i) => `
+    <div class="stream-item ${i===0?'selected':''}" data-idx="${i}" data-type="video">
+      <div class="q">${esc(s.quality)}</div>
+      <div class="d">${s.width}x${s.height} · ${s.codec} · ${fps(s.fps)}</div>
+      <div class="d">${s.bitrate}kbps · ${esc(s.size)}</div>
+    </div>`).join('')
+  $('#audioStreams').innerHTML = d.audioStreams.map((s, i) => `
+    <div class="stream-item ${i===0?'selected':''}" data-idx="${i}" data-type="audio">
+      <div class="q">M4A</div>
+      <div class="d">${s.bitrate} kbps · ${esc(s.size)}</div>
+    </div>`).join('')
+  $$('#videoStreams .stream-item').forEach(el => el.onclick = () => {
+    $$('#videoStreams .stream-item').forEach(e => e.classList.remove('selected'))
+    el.classList.add('selected'); selVideoIdx = +el.dataset.idx
+  })
+  $$('#audioStreams .stream-item').forEach(el => el.onclick = () => {
+    $$('#audioStreams .stream-item').forEach(e => e.classList.remove('selected'))
+    el.classList.add('selected'); selAudioIdx = +el.dataset.idx
+  })
+  updateDlMode()
+}
+
+function fps(v) { return v === Math.floor(v) ? v.toString() : v.toFixed(3) }
+
+// ========== DOWNLOAD MODE ==========
+$('#modeRow').onchange = updateDlMode
+
+function updateDlMode() {
+  const mode = $$('input[name="dlMode"]:checked')[0]?.value || ''
+  $$('.mode-btn').forEach(b => b.classList.remove('selected'))
+  $$('input[name="dlMode"]:checked')[0]?.parentElement.classList.add('selected')
+
+  const needVideo = mode === '' || mode === 'video'
+  const needAudio = mode === '' || mode === 'audio'
+
+  $('#videoSection').classList.toggle('hidden', !needVideo)
+  $('#audioSection').classList.toggle('hidden', !needAudio)
+  $('#extraOpts').classList.toggle('hidden', mode !== '' && mode !== 'video' && mode !== 'audio')
+
+  // Conflict handling
+  $('#skipSub').disabled = (mode === 'sub')
+  if (mode === 'sub') $('#skipSub').checked = false
+  $('#skipCover').disabled = (mode === 'cover')
+  if (mode === 'cover') $('#skipCover').checked = false
+}
+
+// ========== ADVANCED TOGGLE ==========
+$('#advToggle').onclick = () => {
+  const p = $('#advPanel')
+  const t = $('#advToggle')
+  const show = p.classList.contains('hidden')
+  p.classList.toggle('hidden')
+  t.textContent = show ? '▼ 高级设置' : '▶ 高级设置'
+}
+
+// ========== DOWNLOAD ==========
+$('#btnDownload').onclick = async () => {
+  if (!videoInfo) return
+  $('#btnDownload').disabled = true; $('#dlStatus').textContent = '启动中...'
+  $('#progressWrap').classList.remove('hidden'); $('#log').classList.remove('hidden')
+  $('#log').innerHTML = ''; $('#progressFill').style.width = '0%'
+
+  const vs = selVideoIdx !== null ? videoInfo.videoStreams[selVideoIdx] : null
+  const as = selAudioIdx !== null ? videoInfo.audioStreams[selAudioIdx] : null
+  const mode = $$('input[name="dlMode"]:checked')[0]?.value || ''
+
+  const body = {
+    url: $('#url').value.trim(),
+    apiMode: $('#apiMode').value,
+    videoOnly: mode === 'video' || undefined,
+    audioOnly: mode === 'audio' || undefined,
+    danmakuOnly: mode === 'danmaku' || undefined,
+    subOnly: mode === 'sub' || undefined,
+    coverOnly: mode === 'cover' || undefined,
+    dfnPriority: vs?.quality || undefined,
+    encodingPriority: vs?.codec || undefined,
+    downloadDanmaku: $('#danmaku').checked || undefined,
+    skipMux: $('#skipMux').checked || undefined,
+    skipSubtitle: $('#skipSub').checked || undefined,
+    skipCover: $('#skipCover').checked || undefined,
+    videoAscending: $('#videoAsc').checked || undefined,
+    audioAscending: $('#audioAsc').checked || undefined,
+    allowPcdn: $('#allowPcdn').checked || undefined,
+    saveArchives: $('#saveArchives').checked || undefined,
+    filePattern: $('#filePattern').value.trim() || undefined,
+    multiFilePattern: $('#multiFilePattern').value.trim() || undefined,
+    language: $('#language').value.trim() || undefined,
+    delayPerPage: +$('#delayPerPage').value || undefined,
+    userAgent: $('#userAgent').value.trim() || undefined,
+    cookie: $('#cookie').value.trim() || undefined
+  }
+
+  // page selection
+  const selPages = [...$$('#pageChecks input:checked')].map(c => c.value)
+  const totalPages = videoInfo.pages.length
+  if (selPages.length > 0 && selPages.length < totalPages) {
+    body.selectPage = selPages.join(',')
+  }
+
+  // clean undefined values
+  Object.keys(body).forEach(k => { if (body[k] === undefined) delete body[k] })
+
+  const r = await fetch('/api/download', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) })
+  const reader = r.body.getReader()
+  const dec = new TextDecoder(); let buf = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (value) buf += dec.decode(value, { stream: !done })
+    const parts = buf.split(/\n\n/); buf = parts.pop() || ''
+    for (const part of parts) {
+      const lines = part.split('\n')
+      let event = '', data = ''
+      for (const line of lines) {
+        if (line.startsWith('event: ')) event = line.slice(7)
+        else if (line.startsWith('data: ')) data = line.slice(6)
+      }
+      if (!data) continue
+      try {
+        const obj = JSON.parse(data)
+        if (event === 'progress') { $('#progressFill').style.width = obj.percent + '%'; $('#dlStatus').textContent = obj.percent.toFixed(1) + '%' }
+        else if (event === 'status') $('#dlStatus').textContent = obj.msg
+        else if (event === 'log') { $('#log').innerHTML += `<div>${esc(obj.msg)}</div>`; $('#log').scrollTop = $('#log').scrollHeight }
+        else if (event === 'done') { $('#dlStatus').textContent = '下载完成 ✓'; $('#btnDownload').disabled = false; loadFiles() }
+        else if (event === 'error') { $('#dlStatus').textContent = '错误: ' + obj.msg; $('#btnDownload').disabled = false }
+      } catch (_) {}
+    }
+    if (done) break
+  }
+}
+
+// ========== FILES ==========
+async function loadFiles() {
+  try {
+    const files = await (await fetch('/api/files')).json()
+    $('#fileList').innerHTML = files.length === 0
+      ? '<div style="color:#8b949e;font-size:13px">暂无文件</div>'
+      : files.map(f => {
+          let tag = '', ext = f.name.split('.').pop().toLowerCase()
+          if (/^(mp4|flv|mkv)$/.test(ext)) tag = '<span class="ext-tag ext-video">视频</span>'
+          else if (/^(m4a|mp3)$/.test(ext)) tag = '<span class="ext-tag ext-audio">音频</span>'
+          else if (ext === 'ass') tag = '<span class="ext-tag ext-sub">字幕</span>'
+          else if (ext === 'xml') tag = '<span class="ext-tag ext-other">弹幕</span>'
+          let actions = ''
+          if (/^(mp4|flv|mkv|m4a|mp3)$/.test(ext)) actions += `<a href="/api/file/${encodeURIComponent(f.name)}?view=1" target="_blank">播放</a>`
+          else if (ext === 'ass' || ext === 'xml') actions += `<a href="/api/file/${encodeURIComponent(f.name)}?view=1" target="_blank">查看</a>`
+          actions += `<a href="/api/file/${encodeURIComponent(f.name)}">下载</a>`
+          actions += `<a href="#" class="btn-del" data-fn="${esc(f.name)}" style="color:#f85149">删除</a>`
+          return `<div class="file-row">${tag}<span class="fn">${esc(f.name)}</span><span class="sz">${fmtSize(f.size)}</span>${actions}</div>`
+        }).join('')
+    // bind delete
+    $$('.btn-del').forEach(b => b.onclick = async e => {
+      e.preventDefault()
+      if (!confirm('删除 ' + b.dataset.fn + ' ?')) return
+      await fetch('/api/file/' + encodeURIComponent(b.dataset.fn), { method: 'DELETE' })
+      loadFiles()
+    })
+  } catch (_) { $('#fileList').textContent = '加载失败' }
+}
+
+function fmtSize(b) {
+  if (!b) return '0 B'
+  const u = ['B', 'KB', 'MB', 'GB']; let i = 0
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++ }
+  return b.toFixed(1) + ' ' + u[i]
+}
+function esc(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '' }
+
+// ========== INIT ==========
+$('#url').onkeydown = e => { if (e.key === 'Enter') $('#btnParse').click() }
+loadFiles()
+checkLogin()
+</script>
+</body>
+</html>
