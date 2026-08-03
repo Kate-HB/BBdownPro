@@ -8,7 +8,7 @@
 
 ## 快速开始
 
-1. 确保目录下包含 `BBDown.exe`、`ffmpeg.exe`、`server.ps1`、`index.html`
+1. 确保目录下包含 `BBDown.exe`、`ffmpeg.exe`、`server.ps1`、`index.html`、`login-worker.ps1`、`qrcode.min.js`
 2. 双击 `启动.bat`
 3. 浏览器自动打开 `http://localhost:3000`
 
@@ -18,10 +18,14 @@
 
 | 按钮 | 作用 |
 |------|------|
-| 扫码登录 | 调用 `BBDown login`，弹出二维码，B站APP扫码登录 |
+| 扫码登录 | 自研扫码流程（`login-worker.ps1` + `qrcode.min.js`），绕过 BBDown 1.6.3 的"假登录"bug，从 Set-Cookie 提取 SESSDATA |
 | TV登录 | 调用 `BBDown logintv`，电视端扫码登录 |
 
 登录后可下载高画质视频。登录态保存在 `BBDown.data` 文件中。
+
+> ⚠️ **已知问题**：BBDown 1.6.3 是官方最终版本（仓库已归档），其 `BBDown login` 扫码登录存在"假成功"bug——只会写入 `ticket` 等无效 cookie，导致界面误报"已登录"、画质始终停留在最低档。本项目已用自研扫码流程绕开该问题。若沿用旧版 `BBDown login`，请勿再点击扫码。
+
+登录状态按 `BBDown.data` 中是否存在 `SESSDATA` 真实校验；扫码登录进行中会忽略旧账号登录态，支持随时换账号重新登录。
 
 ### 解析视频
 
@@ -97,4 +101,5 @@
 
 - PowerShell 5.x+ (HttpListener)
 - 原生 JavaScript (SSE)
+- qrcode-generator（本地 `qrcode.min.js`，前端渲染二维码）
 - 零外部依赖，无需 npm/pip

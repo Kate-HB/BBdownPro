@@ -218,6 +218,7 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
   <div id="fileList">加载中...</div>
 </div>
 
+<script src="qrcode.min.js"></script>
 <script>
 const $ = s => document.querySelector(s)
 const $$ = s => document.querySelectorAll(s)
@@ -238,10 +239,10 @@ async function checkLogin() {
       $('#btnLogin').textContent = '重新登录'
     } else if (d.loginInProgress) {
       $('#loginDot').className = 'dot no'
-      $('#loginText').textContent = '等待扫码...'
+      $('#loginText').textContent = d.message || '等待扫码...'
     } else {
       $('#loginDot').className = 'dot no'
-      $('#loginText').textContent = '未登录'
+      $('#loginText').textContent = d.message || '未登录'
     }
     return d
   } catch (_) { return {} }
@@ -259,7 +260,14 @@ function startLogin(type) {
       const r = await fetch('/api/login/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type}) })
       const d = await r.json()
       if (d.ok) {
-        $('#qrImg').src = '/api/qrcode?t=' + Date.now()
+        if (d.type === 'web' && d.qrcodeUrl) {
+          const qr = qrcode(0, 'M')
+          qr.addData(d.qrcodeUrl)
+          qr.make()
+          $('#qrImg').src = qr.createDataURL(4, 4)
+        } else {
+          $('#qrImg').src = '/api/qrcode?t=' + Date.now()
+        }
         $('#loginText').textContent = '等待扫码...'
         $('#btnCancelLogin').classList.remove('hidden')
         $('#btnLogin').classList.add('hidden'); $('#btnLoginTv').classList.add('hidden')
@@ -299,6 +307,7 @@ $('#btnLoginTv').onclick = startLogin('tv')
 $('#btnCancelLogin').onclick = () => {
   const poll = $('#btnCancelLogin').dataset.pollId
   if (poll) clearInterval(+poll)
+  fetch('/api/login/cancel', { method: 'POST' }).catch(() => {})
   endLoginUI()
   $('#loginText').textContent = '未登录'
 }
