@@ -115,25 +115,77 @@ while ($listener.IsListening) {
       $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
       $ctx.Response.Close(); continue
     }
+    # GET /qrcode.min.js
+    if ($method -eq 'GET' -and $path -eq '/qrcode.min.js') {
+      $jsPath = Join-Path $workDir 'qrcode.min.js'
+      if (-not (Test-Path $jsPath)) { json $ctx @{ error='Not found' } 404; continue }
+      $js = [IO.File]::ReadAllBytes($jsPath)
+      $ctx.Response.ContentType = 'application/javascript; charset=utf-8'
+      $ctx.Response.OutputStream.Write($js, 0, $js.Length); $ctx.Response.Close(); continue
+    }
     # GET /api/login/status
     if ($method -eq 'GET' -and $path -eq '/api/login/status') {
+      $loggedIn = $false
+      $inProgress = ($script:loginProc -ne $null -and !$script:loginProc.HasExited)
+      # 登录进行中时忽略旧账号的 SESSDATA，避免误判新登录已完成
+      if (-not $inProgress -and (Test-Path $datafile)) { $loggedIn = ((Get-Content $datafile -Raw -ErrorAction SilentlyContinue) -match 'SESSDATA=') }
+      $msg = ''
+      if (-not $loggedIn) {
+        $statusFile = Join-Path $workDir 'login-status.txt'
+        if (Test-Path $statusFile) {
+          $st = (Get-Content $statusFile -Raw -ErrorAction SilentlyContinue).Trim()
+          if ($st -eq 'EXPIRED') { $msg = '二维码已过期，请重新生成' }
+          elseif ($st -eq 'TIMEOUT') { $msg = '登录超时，请重新生成' }
+          elseif ($st -like 'ERROR*') { $msg = $st }
+        }
+      }
       json $ctx @{
-        loggedIn=(Test-Path $datafile)
-        loginInProgress=($script:loginProc -ne $null -and !$script:loginProc.HasExited)
+        loggedIn=$loggedIn
+        loginInProgress=$inProgress
+        message=$msg
       }; continue
     }
     # POST /api/login/start
     if ($method -eq 'POST' -and $path -eq '/api/login/start') {
       $body = read-body $ctx
-      $loginCmd = if ($body.type -eq 'tv') { 'logintv' } else { 'login' }
-      if ($script:loginProc -and !$script:loginProc.HasExited) { json $ctx @{ error='Login already in progress' } 400; continue }
-      Remove-Item $qrfile -Force -ErrorAction SilentlyContinue
+      # 已有登录进程则先结束，允许随时换账号重新登录
+      if ($script:loginProc -and !$script:loginProc.HasExited) { try { $script:loginProc.Kill() } catch {} }
+      if ($body.type -eq 'tv') {
+        # TV 登录（走 BBDown logintv）
+        Remove-Item $qrfile -Force -ErrorAction SilentlyContinue
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $bbdown; $pinfo.Arguments = 'logintv'; $pinfo.WorkingDirectory = $workDir
+        $pinfo.UseShellExecute = $false; $pinfo.CreateNoWindow = $true
+        $script:loginProc = [System.Diagnostics.Process]::Start($pinfo)
+        for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Milliseconds 500; if (Test-Path $qrfile) { break } }
+        json $ctx @{ ok=$true; qrReady=(Test-Path $qrfile); type='tv' }; continue
+      }
+      # WEB 扫码登录（自研流程，绕开 BBDown 1.6.3 假登录 bug）
+      Remove-Item (Join-Path $workDir 'qrcode_url.txt') -Force -ErrorAction SilentlyContinue
+      Remove-Item (Join-Path $workDir 'login-status.txt') -Force -ErrorAction SilentlyContinue
+      $worker = Join-Path $workDir 'login-worker.ps1'
       $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-      $pinfo.FileName = $bbdown; $pinfo.Arguments = $loginCmd; $pinfo.WorkingDirectory = $workDir
-      $pinfo.UseShellExecute = $false; $pinfo.CreateNoWindow = $true
+      $pinfo.FileName = 'powershell.exe'
+      $pinfo.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$worker`" `"$workDir`""
+      $pinfo.WorkingDirectory = $workDir; $pinfo.UseShellExecute = $false; $pinfo.CreateNoWindow = $true
       $script:loginProc = [System.Diagnostics.Process]::Start($pinfo)
-      for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Milliseconds 500; if (Test-Path $qrfile) { break } }
-      json $ctx @{ ok=$true; qrReady=(Test-Path $qrfile) }; continue
+      $qrUrl = ''
+      for ($i = 0; $i -lt 40; $i++) { Start-Sleep -Milliseconds 500; if (Test-Path (Join-Path $workDir 'qrcode_url.txt')) { $qrUrl = Get-Content (Join-Path $workDir 'qrcode_url.txt') -Raw; break } }
+      # 注意：此响应含 URL，子进程运行期间 ConvertTo-Json 会卡死，故手工拼 JSON
+      $ok = if ($qrUrl -ne '') { 'true' } else { 'false' }
+      $esc = ([string]$qrUrl).Replace('\','\\').Replace('"','\"')
+      $jsonBody = '{"ok":' + $ok + ',"type":"web","qrcodeUrl":"' + $esc + '"}'
+      $ctx.Response.StatusCode = 200
+      $ctx.Response.ContentType = "application/json; charset=utf-8"
+      $bytes = [Text.Encoding]::UTF8.GetBytes($jsonBody)
+      $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+      $ctx.Response.Close()
+      continue
+    }
+    # POST /api/login/cancel
+    if ($method -eq 'POST' -and $path -eq '/api/login/cancel') {
+      if ($script:loginProc -and !$script:loginProc.HasExited) { try { $script:loginProc.Kill() } catch {} }
+      json $ctx @{ ok=$true }; continue
     }
     # GET /api/qrcode
     if ($method -eq 'GET' -and $path -eq '/api/qrcode') {
