@@ -4,6 +4,20 @@ $bbdown = Join-Path $workDir "BBDown.exe"
 $ffmpeg = Join-Path $workDir "ffmpeg.exe"
 $qrfile = Join-Path $workDir "qrcode.png"
 $datafile = Join-Path $workDir "BBDown.data"
+$configfile = Join-Path $workDir "config.json"
+$script:downloadDir = $workDir
+function load-config {
+  if (-not (Test-Path $configfile)) { return }
+  try {
+    $cfg = Get-Content $configfile -Raw | ConvertFrom-Json
+    if ($cfg.downloadDir) {
+      $dir = [IO.Path]::GetFullPath([string]$cfg.downloadDir)
+      if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+      $script:downloadDir = $dir
+    }
+  } catch {}
+}
+load-config
 $port = 3000
 
 $acl = "http://localhost:$port/"
@@ -54,6 +68,13 @@ function run-bbdown {
   return @{ code = $proc.ExitCode; stdout = $stdout; stderr = $stderr; cmd = $cmdline }
 }
 
+# 递归统计目录大小（含 BBDown 下载中的临时分片）
+function dir-size($path) {
+  if (-not (Test-Path $path)) { return 0 }
+  $s = (Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+  if (-not $s) { return 0 } else { return [long]$s }
+}
+
 # -- parse BBDown -info output --
 function parse-info($stdout) {
   $result = @{ title=''; upHome=''; date=''; pages=@(); videoStreams=@(); audioStreams=@() }
@@ -89,6 +110,20 @@ function sse-send($sw, $event, $data) {
   $sw.Write("event: $event`n")
   $sw.Write("data: $(ConvertTo-Json $data -Compress -Depth 5)`n")
   $sw.Write("`n")
+}
+
+# 解析 BBDown 输出行并发 SSE（进度行含百分比+速度+已下/总量）
+function send-bbdown-line($sw, $line) {
+  $t = $line.Trim()
+  if (-not $t) { return }
+  if ($t -match '(\d+\.?\d*)%') {
+    $m = @{ percent=[double]$Matches[1] }
+    if ($t -match '([\d.]+)\s*(KiB|MiB|GiB|TiB)?/s' -and $Matches[1]) { $m.speed=[double]$Matches[1]; $m.speedUnit=$Matches[2] }
+    if ($t -match '([\d.]+)\s*(KiB|MiB|GiB|TiB)?/([\d.]+)\s*(KiB|MiB|GiB|TiB)?' -and $Matches[1] -and $Matches[3]) { $m.done=[double]$Matches[1]; $m.doneUnit=$Matches[2]; $m.total=[double]$Matches[3]; $m.totalUnit=$Matches[4] }
+    sse-send $sw 'progress' $m
+  }
+  elseif ($t -match '开始下载|合并|分片|下载.*完毕|任务完成|完成') { sse-send $sw 'status' @{ msg=$t } }
+  else { sse-send $sw 'log' @{ msg=$t } }
 }
 
 # -- login state --
@@ -194,6 +229,62 @@ while ($listener.IsListening) {
       $ctx.Response.ContentType = "image/png"; $ctx.Response.Headers.Add("Cache-Control", "no-cache")
       $ctx.Response.OutputStream.Write($img, 0, $img.Length); $ctx.Response.Close(); continue
     }
+    # GET /api/config
+    if ($method -eq 'GET' -and $path -eq '/api/config') {
+      json $ctx @{ downloadDir=$script:downloadDir }; continue
+    }
+    # POST /api/config
+    if ($method -eq 'POST' -and $path -eq '/api/config') {
+      $body = read-body $ctx
+      if (-not $body.downloadDir) { json $ctx @{ error='Missing downloadDir' } 400; continue }
+      try {
+        $dir = [IO.Path]::GetFullPath([string]$body.downloadDir)
+        if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $cfgJson = @{ downloadDir=$dir } | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($configfile, $cfgJson, (New-Object System.Text.UTF8Encoding($false)))
+        $script:downloadDir = $dir
+        json $ctx @{ ok=$true; downloadDir=$dir }
+      } catch { json $ctx @{ error=$_.Exception.Message } 500 }
+      continue
+    }
+    # POST /api/browse  弹出本机文件夹选择框（以当前前台窗口即浏览器为 owner，浮于网页之上）
+    if ($method -eq 'POST' -and $path -eq '/api/browse') {
+      try {
+        Add-Type -AssemblyName System.Windows.Forms
+        if (-not ('BBWin32' -as [type])) {
+          Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+public class BBWin32 {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  public static IntPtr Active() { return GetForegroundWindow(); }
+}
+public class BBWin32Window : NativeWindow {}
+'@ -ReferencedAssemblies System.Windows.Forms
+        }
+        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dlg.Description = '选择下载目录'
+        $dlg.SelectedPath = $script:downloadDir
+        $dlg.ShowNewFolderButton = $true
+        $result = $null
+        $hwnd = [BBWin32]::Active()
+        if ($hwnd -ne [IntPtr]::Zero) {
+          $owner = New-Object BBWin32Window
+          try { $owner.AssignHandle($hwnd); $result = $dlg.ShowDialog($owner) }
+          catch { $result = $dlg.ShowDialog() }
+          finally { $owner.ReleaseHandle() }
+        } else {
+          $result = $dlg.ShowDialog()
+        }
+        if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+          json $ctx @{ path = $dlg.SelectedPath }
+        } else {
+          json $ctx @{ path = '' }
+        }
+      } catch { json $ctx @{ error=$_.Exception.Message } 500 }
+      continue
+    }
     # POST /api/info
     if ($method -eq 'POST' -and $path -eq '/api/info') {
       $body = read-body $ctx
@@ -216,7 +307,7 @@ while ($listener.IsListening) {
     if ($method -eq 'POST' -and $path -eq '/api/download') {
       $body = read-body $ctx
       if (-not $body.url) { json $ctx @{ error='Missing url' } 400; continue }
-      $dlArgs = @($body.url, '--work-dir', $workDir, '--ffmpeg-path', $ffmpeg)
+      $dlArgs = @($body.url, '--work-dir', $script:downloadDir, '--ffmpeg-path', $ffmpeg)
 
       # API mode
       if ($body.apiMode -eq 'tv') { $dlArgs += '--use-tv-api' }
@@ -269,39 +360,84 @@ while ($listener.IsListening) {
       $enc = [Text.Encoding]::GetEncoding('gb2312')
       $pinfo.StandardOutputEncoding = $enc; $pinfo.StandardErrorEncoding = $enc
       $proc = [System.Diagnostics.Process]::Start($pinfo)
-      $buffer = ''
-      while (!$proc.HasExited) {
-        while ($proc.StandardOutput.Peek() -ge 0) { $buffer += [char]$proc.StandardOutput.Read() }
-        while ($proc.StandardError.Peek() -ge 0) { $buffer += [char]$proc.StandardError.Read() }
-        $lines = $buffer -split "\r?\n"
-        if ($lines.Count -gt 1) {
-          $buffer = $lines[-1]
-          for ($i = 0; $i -lt $lines.Count - 1; $i++) {
-            $t = $lines[$i].Trim()
-            if (-not $t) { continue }
-            if ($t -match '(\d+\.?\d*)%') { sse-send $sw 'progress' @{ percent=[double]$Matches[1] } }
-            elseif ($t -match '下载完成|合并|合成|完成') { sse-send $sw 'status' @{ msg=$t } }
-            else { sse-send $sw 'log' @{ msg=$t } }
+      try {
+        # 纯 .NET 异步读取（ReadAsync + Task 轮询），不用 PS 事件回调（PS5.1 会栈溢出），
+        # 也不阻塞读空管道；进度条以 \r 结尾，按 \r/\n 切行即时上报
+        # 文件增长监控（BBDown 1.6.3 不输出百分比，靠下载目录体积估算进度/速度）
+        $sw2 = [Diagnostics.Stopwatch]::StartNew()
+        $baseBytes = dir-size $script:downloadDir
+        $lastBytes = 0
+        $lastTick = 0
+        $outReader = $proc.StandardOutput
+        $errReader = $proc.StandardError
+        $outChars = New-Object char[] 8192; $errChars = New-Object char[] 8192
+        $outTask = $outReader.ReadAsync($outChars, 0, $outChars.Length)
+        $errTask = $errReader.ReadAsync($errChars, 0, $errChars.Length)
+        $outEOF = $false; $errEOF = $false
+        $pending = ''
+        $idle = 0
+        while ($true) {
+          $gotData = $false
+          if (-not $outEOF -and $outTask.IsCompleted) {
+            $n = $outTask.Result
+            if ($n -gt 0) { $pending += [string]::new($outChars, 0, $n); $gotData = $true; $outTask = $outReader.ReadAsync($outChars, 0, $outChars.Length) }
+            else { $outEOF = $true }
           }
+          if (-not $errEOF -and $errTask.IsCompleted) {
+            $n = $errTask.Result
+            if ($n -gt 0) { $pending += [string]::new($errChars, 0, $n); $gotData = $true; $errTask = $errReader.ReadAsync($errChars, 0, $errChars.Length) }
+            else { $errEOF = $true }
+          }
+          $lines = $pending -split "\r?\n|\r"
+          if ($lines.Count -gt 1) {
+            $pending = $lines[-1]
+            for ($i = 0; $i -lt $lines.Count - 1; $i++) { send-bbdown-line $sw $lines[$i] }
+          }
+          if ($proc.HasExited) {
+            if (-not $gotData) { $idle++ } else { $idle = 0 }
+            if ($outEOF -and $errEOF -and -not $pending.Trim()) { break }
+            if ($idle -ge 30) { break }   # 退出后再等最多 3 秒排空，防子进程占管道
+          } else { $idle = 0 }
+          # 每 0.5 秒上报一次字节进度
+          $elapsed = $sw2.Elapsed.TotalSeconds
+          if (($elapsed - $lastTick) -ge 0.5) {
+            $cur = (dir-size $script:downloadDir) - $baseBytes
+            if ($cur -gt 0 -or $lastBytes -gt 0) {
+              $rate = [Math]::Max(0, [int64](($cur - $lastBytes) / [Math]::Max(0.001, ($elapsed - $lastTick))))
+              sse-send $sw 'progress' @{ bytes=$cur; speed=$rate }
+            }
+            $lastBytes = $cur; $lastTick = $elapsed
+          }
+          Start-Sleep -Milliseconds 100
         }
-        Start-Sleep -Milliseconds 100
+        $proc.WaitForExit()
+        if ($pending.Trim()) { send-bbdown-line $sw $pending }
+        if ($proc.ExitCode -eq 0) { sse-send $sw 'done' @{ success=$true } } else { sse-send $sw 'error' @{ msg="exit: $($proc.ExitCode)" } }
+        $sw.Close(); $ctx.Response.Close()
+      } catch {
+        try { $_.Exception.ToString() | Out-File (Join-Path $workDir 'dl-error.log') -Append } catch {}
+        # 客户端断开或出错时结束 BBDown，避免孤儿进程
+        try { $proc.Kill() } catch {}
+        $sw.Dispose()
       }
-      while ($proc.StandardOutput.Peek() -ge 0) { $buffer += [char]$proc.StandardOutput.Read() }
-      while ($proc.StandardError.Peek() -ge 0) { $buffer += [char]$proc.StandardError.Read() }
-      if ($proc.ExitCode -eq 0) { sse-send $sw 'done' @{ success=$true } } else { sse-send $sw 'error' @{ msg="exit: $($proc.ExitCode)" } }
-      $sw.Close(); $ctx.Response.Close(); continue
+      continue
     }
     # GET /api/files
     if ($method -eq 'GET' -and $path -eq '/api/files') {
-      $files = Get-ChildItem $workDir | ? { $_.Extension -match '\.(mp4|flv|mkv|m4a|mp3|ass|xml)$' } | Sort LastWriteTime -Desc | % { @{ name=$_.Name; size=$_.Length; mtime=$_.LastWriteTime.ToString('o') } }
+      $files = Get-ChildItem $script:downloadDir -Recurse -File | ? { $_.Extension -match '\.(mp4|flv|mkv|m4a|mp3|ass|xml)$' } | Sort LastWriteTime -Desc | % {
+        $rel = $_.FullName.Substring(([IO.Path]::GetFullPath($script:downloadDir)).Length).TrimStart('\','/')
+        @{ name=$rel; size=$_.Length; mtime=$_.LastWriteTime.ToString('o') }
+      }
       json $ctx @($files); continue
     }
-    # GET /api/file/:name
+    # GET /api/file/:name   （支持子目录相对路径，防路径穿越）
     if ($method -eq 'GET' -and $path -match '^/api/file/(.+)$') {
       $fname = [Uri]::UnescapeDataString($Matches[1])
-      $fname = [System.IO.Path]::GetFileName($fname)
-      $fpath = Join-Path $workDir $fname
+      $fpath = [IO.Path]::GetFullPath((Join-Path $script:downloadDir $fname))
+      $dl = ([IO.Path]::GetFullPath($script:downloadDir)).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+      if (-not $fpath.StartsWith($dl, [StringComparison]::OrdinalIgnoreCase)) { json $ctx @{ error='Forbidden' } 403; continue }
       if (-not (Test-Path $fpath)) { json $ctx @{ error='Not found' } 404; continue }
+      $fname = [System.IO.Path]::GetFileName($fname)
       $bytes = [System.IO.File]::ReadAllBytes($fpath)
       if ($req.QueryString['view'] -eq '1') {
         if ($fname -match '\.(mp4|flv|mkv)$') { $ctx.Response.ContentType = 'video/mp4' }
@@ -317,8 +453,9 @@ while ($listener.IsListening) {
     # DELETE /api/file/:name
     if ($method -eq 'DELETE' -and $path -match '^/api/file/(.+)$') {
       $fname = [Uri]::UnescapeDataString($Matches[1])
-      $fname = [System.IO.Path]::GetFileName($fname)
-      $fpath = Join-Path $workDir $fname
+      $fpath = [IO.Path]::GetFullPath((Join-Path $script:downloadDir $fname))
+      $dl = ([IO.Path]::GetFullPath($script:downloadDir)).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+      if (-not $fpath.StartsWith($dl, [StringComparison]::OrdinalIgnoreCase)) { json $ctx @{ error='Forbidden' } 403; continue }
       if (-not (Test-Path $fpath)) { json $ctx @{ error='Not found' } 404; continue }
       Remove-Item $fpath -Force
       json $ctx @{ ok=$true }; continue

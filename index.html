@@ -59,6 +59,8 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 /* progress */
 .progress-bar{width:100%;height:6px;background:#30363d;border-radius:3px;overflow:hidden;margin:8px 0}
 .progress-bar .fill{height:100%;background:#238636;transition:width .2s}
+.progress-bar .fill.indeterminate{width:35%;animation:slide 1.3s infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
 #log{max-height:200px;overflow-y:auto;font:12px/1.5 Consolas,monospace;color:#8b949e;background:#0d1117;padding:8px;border-radius:4px;margin-top:8px}
 
 /* advanced */
@@ -113,6 +115,17 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
   <div id="qrWrap" class="hidden">
     <img id="qrImg" src="" alt="QR Code">
     <div class="hint">打开B站APP扫描二维码</div>
+  </div>
+</div>
+
+<!-- ===== SETTINGS ===== -->
+<div class="card">
+  <div class="row">
+    <span style="font-weight:600;font-size:13px">下载目录</span>
+    <input type="text" id="downloadDir" placeholder="下载文件存放路径（默认：本程序目录）" style="flex:1">
+    <button class="btn-sm btn-outline" id="btnBrowse">选择目录</button>
+    <button class="btn-sm btn-primary" id="btnSaveDir">保存</button>
+    <span id="dirStatus" style="font-size:12px;color:#8b949e"></span>
   </div>
 </div>
 
@@ -419,7 +432,7 @@ $('#btnDownload').onclick = async () => {
   if (!videoInfo) return
   $('#btnDownload').disabled = true; $('#dlStatus').textContent = '启动中...'
   $('#progressWrap').classList.remove('hidden'); $('#log').classList.remove('hidden')
-  $('#log').innerHTML = ''; $('#progressFill').style.width = '0%'
+  $('#log').innerHTML = ''; $('#progressFill').style.width = '0%'; $('#progressFill').classList.remove('indeterminate')
 
   const vs = selVideoIdx !== null ? videoInfo.videoStreams[selVideoIdx] : null
   const as = selAudioIdx !== null ? videoInfo.audioStreams[selAudioIdx] : null
@@ -443,8 +456,8 @@ $('#btnDownload').onclick = async () => {
     audioAscending: $('#audioAsc').checked || undefined,
     allowPcdn: $('#allowPcdn').checked || undefined,
     saveArchives: $('#saveArchives').checked || undefined,
-    filePattern: $('#filePattern').value.trim() || undefined,
-    multiFilePattern: $('#multiFilePattern').value.trim() || undefined,
+    filePattern: $('#filePattern').value.trim() || '<videoTitle>/<pageTitle>',
+    multiFilePattern: $('#multiFilePattern').value.trim() || '<videoTitle>/[P<pageNumberWithZero>]<pageTitle>',
     language: $('#language').value.trim() || undefined,
     delayPerPage: +$('#delayPerPage').value || undefined,
     userAgent: $('#userAgent').value.trim() || undefined,
@@ -478,7 +491,30 @@ $('#btnDownload').onclick = async () => {
       if (!data) continue
       try {
         const obj = JSON.parse(data)
-        if (event === 'progress') { $('#progressFill').style.width = obj.percent + '%'; $('#dlStatus').textContent = obj.percent.toFixed(1) + '%' }
+        if (event === 'progress') {
+          if (obj.percent != null) {
+            // 百分比型（BBDown 输出 % 时）
+            $('#progressFill').classList.remove('indeterminate')
+            $('#progressFill').style.width = obj.percent + '%'
+            let t = obj.percent.toFixed(1) + '%'
+            if (obj.speed != null) t += ' · ' + obj.speed + ' ' + (obj.speedUnit || 'B') + '/s'
+            if (obj.done != null && obj.total != null) t += ' · ' + obj.done + ' ' + (obj.doneUnit || 'B') + ' / ' + obj.total + ' ' + (obj.totalUnit || 'B')
+            $('#dlStatus').textContent = t
+          } else if (obj.bytes != null) {
+            // 字节型（BBDown 1.6.3 不输出百分比，用文件增长估算）
+            const total = estTotalBytes()
+            const spd = fmtSpeed(obj.speed)
+            if (total > 0) {
+              const pct = Math.min(100, (obj.bytes / total) * 100)
+              $('#progressFill').classList.remove('indeterminate')
+              $('#progressFill').style.width = pct + '%'
+              $('#dlStatus').textContent = `下载中 · ${fmtSize(obj.bytes)} / ${fmtSize(total)} (约 ${pct.toFixed(0)}%) · ${spd}`
+            } else {
+              $('#progressFill').classList.add('indeterminate')
+              $('#dlStatus').textContent = `下载中 · ${fmtSize(obj.bytes)} · ${spd}`
+            }
+          }
+        }
         else if (event === 'status') $('#dlStatus').textContent = obj.msg
         else if (event === 'log') { $('#log').innerHTML += `<div>${esc(obj.msg)}</div>`; $('#log').scrollTop = $('#log').scrollHeight }
         else if (event === 'done') { $('#dlStatus').textContent = '下载完成 ✓'; $('#btnDownload').disabled = false; loadFiles() }
@@ -524,12 +560,70 @@ function fmtSize(b) {
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++ }
   return b.toFixed(1) + ' ' + u[i]
 }
+function fmtSpeed(bps) {
+  if (!bps) return '0 B/s'
+  const u = ['B', 'KB', 'MB', 'GB']; let i = 0
+  while (bps >= 1024 && i < u.length - 1) { bps /= 1024; i++ }
+  return bps.toFixed(1) + ' ' + u[i] + '/s'
+}
+function parseSizeStr(s) {
+  const m = String(s || '').match(/([\d.]+)\s*(KB|MB|GB)/i)
+  if (!m) return 0
+  const v = parseFloat(m[1]), u = m[2].toUpperCase()
+  return v * (u === 'KB' ? 1024 : u === 'MB' ? 1048576 : 1073741824)
+}
+function estTotalBytes() {
+  if (!videoInfo) return 0
+  const mode = $$('input[name="dlMode"]:checked')[0]?.value || ''
+  const vs = selVideoIdx != null ? videoInfo.videoStreams[selVideoIdx] : null
+  const as = selAudioIdx != null ? videoInfo.audioStreams[selAudioIdx] : null
+  let t = 0
+  if ((mode === '' || mode === 'video') && vs) t += parseSizeStr(vs.size)
+  if ((mode === '' || mode === 'audio') && as) t += parseSizeStr(as.size)
+  return t
+}
 function esc(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '' }
+
+// ========== SETTINGS ==========
+async function loadConfig() {
+  try {
+    const c = await (await fetch('/api/config')).json()
+    $('#downloadDir').value = c.downloadDir || ''
+  } catch (_) {}
+}
+async function saveDir(dir) {
+  $('#btnSaveDir').disabled = true
+  try {
+    const r = await fetch('/api/config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({downloadDir: dir}) })
+    const d = await r.json()
+    $('#dirStatus').textContent = d.ok ? '已保存，后续下载使用该目录' : ('保存失败: ' + (d.error || ''))
+  } catch (e) { $('#dirStatus').textContent = '保存失败: ' + e.message }
+  $('#btnSaveDir').disabled = false
+}
+$('#btnSaveDir').onclick = () => {
+  const dir = $('#downloadDir').value.trim()
+  if (!dir) { $('#dirStatus').textContent = '路径不能为空'; return }
+  saveDir(dir)
+}
+$('#btnBrowse').onclick = async () => {
+  $('#dirStatus').textContent = '请在弹出的系统窗口中选择文件夹...'
+  try {
+    const r = await fetch('/api/browse', { method: 'POST' })
+    const d = await r.json()
+    if (d.path) {
+      $('#downloadDir').value = d.path
+      saveDir(d.path)
+    } else {
+      $('#dirStatus').textContent = ''
+    }
+  } catch (e) { $('#dirStatus').textContent = '选择失败: ' + e.message }
+}
 
 // ========== INIT ==========
 $('#url').onkeydown = e => { if (e.key === 'Enter') $('#btnParse').click() }
 loadFiles()
 checkLogin()
+loadConfig()
 </script>
 </body>
 </html>
