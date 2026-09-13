@@ -96,6 +96,9 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 .check-label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 .check-label input{width:auto}
 .check-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+
+.single-choice-group {display: flex;gap: 20px;align-items: center;}
+.single-choice-group label {display: inline-flex;align-items: center;gap: 6px;cursor: pointer;}
 </style>
 </head>
 <body>
@@ -213,6 +216,35 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
       <label class="check-label"><input type="checkbox" id="skipCover"> 跳过封面</label>
       <label class="check-label"><input type="checkbox" id="allowPcdn"> 允许PCDN</label>
       <label class="check-label"><input type="checkbox" id="saveArchives"> 存档记录(跳过重复)</label>
+    </div>
+    
+    <div class="full single-choice-group">
+      <span id="formatting-tip" style="font-size:12px;color:#8b949e">下载后的格式转换</span>
+
+      <label>
+        <input type="radio" name="format" value="none" checked>
+        不转换
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="mp3">
+        MP3
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="flac">
+        FLAC
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="ogg">
+        OGG
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="mov">
+        MOV
+      </label>
     </div>
   </div>
 
