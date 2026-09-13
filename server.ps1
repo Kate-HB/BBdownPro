@@ -2,7 +2,6 @@
 $workDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bbdown = Join-Path $workDir "BBDown.exe"
 $ffmpeg = Join-Path $workDir "ffmpeg.exe"
-$qrfile = Join-Path $workDir "qrcode.png"
 $datafile = Join-Path $workDir "BBDown.data"
 $configfile = Join-Path $workDir "config.json"
 $script:downloadDir = $workDir
@@ -69,6 +68,12 @@ function run-bbdown {
 }
 
 # 递归统计目录大小（含 BBDown 下载中的临时分片）
+# 找出相对基线新增的、扩展名落在 $exts 里的文件（用于判断补跑是否真的拿到了文件）
+function new-files($dir, $before, $exts) {
+  @(Get-ChildItem $dir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $exts -contains $_.Extension.ToLower() -and $before -notcontains $_.FullName })
+}
+
 function dir-size($path) {
   if (-not (Test-Path $path)) { return 0 }
   $s = (Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
@@ -94,6 +99,39 @@ function parse-info($stdout) {
     }
   }
   return $result
+}
+
+# BBDown 没有音频画质参数，唯一能精确指定流的途径是 -ia 交互模式：
+# 它把候选流打进 stdout 再等 stdin 里的序号。下面两个函数从刚打印出的列表里算出该回填的序号。
+# 多P时每P各打印一份列表，故只看最后一份（从最后一个"条视频流"标记往后切）
+function ia-tail($seen, $mark) {
+  $k = $seen.LastIndexOf($mark)
+  if ($k -lt 0) { return $seen }
+  return $seen.Substring($k)
+}
+function ia-pick-video($seen, $quality, $codec) {
+  $s = (parse-info (ia-tail $seen '条视频流')).videoStreams
+  if (-not $quality) { return 0 }
+  $hit = @($s | Where-Object { $_.quality -eq $quality -and $_.codec -eq $codec })
+  if ($hit.Count -eq 0) { $hit = @($s | Where-Object { $_.quality -eq $quality }) }
+  if ($hit.Count -eq 0) { return 0 }
+  return $hit[0].index
+}
+function ia-pick-audio($seen, $bitrate, $size, $ascending) {
+  $s = (parse-info (ia-tail $seen '条音频流')).audioStreams
+  if ($s.Count -eq 0) { return 0 }
+  # 勾了音频升序就取码率最低的一条，与 --audio-ascending 的语义对齐。
+  # 注意不能用 Sort-Object bitrate：对 hashtable 数组它排出来是反的，只能自己比
+  if ($ascending) {
+    $best = $s[0]
+    foreach ($x in $s) { if ([int]$x.bitrate -lt [int]$best.bitrate) { $best = $x } }
+    return $best.index
+  }
+  if (-not $bitrate) { return 0 }
+  $hit = @($s | Where-Object { $_.bitrate -eq [int]$bitrate -and $_.size -eq $size })
+  if ($hit.Count -eq 0) { $hit = @($s | Where-Object { $_.bitrate -eq [int]$bitrate }) }
+  if ($hit.Count -eq 0) { return 0 }
+  return $hit[0].index
 }
 
 # -- SSE --
@@ -182,20 +220,10 @@ while ($listener.IsListening) {
     }
     # POST /api/login/start
     if ($method -eq 'POST' -and $path -eq '/api/login/start') {
-      $body = read-body $ctx
+      read-body $ctx | Out-Null
       # 已有登录进程则先结束，允许随时换账号重新登录
       if ($script:loginProc -and !$script:loginProc.HasExited) { try { $script:loginProc.Kill() } catch {} }
-      if ($body.type -eq 'tv') {
-        # TV 登录（走 BBDown logintv）
-        Remove-Item $qrfile -Force -ErrorAction SilentlyContinue
-        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pinfo.FileName = $bbdown; $pinfo.Arguments = 'logintv'; $pinfo.WorkingDirectory = $workDir
-        $pinfo.UseShellExecute = $false; $pinfo.CreateNoWindow = $true
-        $script:loginProc = [System.Diagnostics.Process]::Start($pinfo)
-        for ($i = 0; $i -lt 20; $i++) { Start-Sleep -Milliseconds 500; if (Test-Path $qrfile) { break } }
-        json $ctx @{ ok=$true; qrReady=(Test-Path $qrfile); type='tv' }; continue
-      }
-      # WEB 扫码登录（自研流程，绕开 BBDown 1.6.3 假登录 bug）
+      # 扫码登录（自研流程，绕开 BBDown 1.6.3 假登录 bug）
       Remove-Item (Join-Path $workDir 'qrcode_url.txt') -Force -ErrorAction SilentlyContinue
       Remove-Item (Join-Path $workDir 'login-status.txt') -Force -ErrorAction SilentlyContinue
       $worker = Join-Path $workDir 'login-worker.ps1'
@@ -221,13 +249,6 @@ while ($listener.IsListening) {
     if ($method -eq 'POST' -and $path -eq '/api/login/cancel') {
       if ($script:loginProc -and !$script:loginProc.HasExited) { try { $script:loginProc.Kill() } catch {} }
       json $ctx @{ ok=$true }; continue
-    }
-    # GET /api/qrcode
-    if ($method -eq 'GET' -and $path -eq '/api/qrcode') {
-      if (-not (Test-Path $qrfile)) { json $ctx @{ error='No QR code' } 404; continue }
-      $img = [System.IO.File]::ReadAllBytes($qrfile)
-      $ctx.Response.ContentType = "image/png"; $ctx.Response.Headers.Add("Cache-Control", "no-cache")
-      $ctx.Response.OutputStream.Write($img, 0, $img.Length); $ctx.Response.Close(); continue
     }
     # GET /api/config
     if ($method -eq 'GET' -and $path -eq '/api/config') {
@@ -293,8 +314,6 @@ public class BBWin32Window : NativeWindow {}
         $result = run-bbdown $body.url '-info' '--show-all' '--use-tv-api'
       } elseif ($body.apiMode -eq 'app') {
         $result = run-bbdown $body.url '-info' '--show-all' '--use-app-api'
-      } elseif ($body.apiMode -eq 'intl') {
-        $result = run-bbdown $body.url '-info' '--show-all' '--use-intl-api'
       } else {
         $result = run-bbdown $body.url '-info' '--show-all'
       }
@@ -312,7 +331,6 @@ public class BBWin32Window : NativeWindow {}
       # API mode
       if ($body.apiMode -eq 'tv') { $dlArgs += '--use-tv-api' }
       elseif ($body.apiMode -eq 'app') { $dlArgs += '--use-app-api' }
-      elseif ($body.apiMode -eq 'intl') { $dlArgs += '--use-intl-api' }
 
       # Download mode
       if ($body.videoOnly) { $dlArgs += '--video-only' }
@@ -321,17 +339,26 @@ public class BBWin32Window : NativeWindow {}
       if ($body.subOnly) { $dlArgs += '--sub-only' }
       if ($body.coverOnly) { $dlArgs += '--cover-only' }
 
-      # Stream selection
-      if ($body.dfnPriority) { $dlArgs += @('-q', $body.dfnPriority) }
-      if ($body.encodingPriority) { $dlArgs += @('-e', $body.encodingPriority) }
+      # 流选择：BBDown 没有音频画质参数，要精确指定音频流只能靠 -ia 交互模式，
+      # 故用户在界面上点了流卡片时改用 -ia，由下面的读循环把序号回填进 stdin；-q/-e 此时让位
+      $useIa = ($body.dfnPriority -or $body.audioSize -or $body.audioAscending) -and
+               -not $body.subOnly -and -not $body.danmakuOnly -and -not $body.coverOnly
+      if ($useIa) { $dlArgs += '-ia' }
+      else {
+        if ($body.dfnPriority) { $dlArgs += @('-q', $body.dfnPriority) }
+        if ($body.encodingPriority) { $dlArgs += @('-e', $body.encodingPriority) }
+      }
 
       # Extra downloads
       if ($body.downloadDanmaku) { $dlArgs += '-dd' }
 
       # Skip flags
       if ($body.skipMux) { $dlArgs += '--skip-mux' }
-      if ($body.skipSubtitle) { $dlArgs += '--skip-subtitle' }
       if ($body.skipCover) { $dlArgs += '--skip-cover' }
+      # 字幕：一次下载人工+AI。BBDown 的 --skip-ai 默认开启，要显式关掉才会下 AI
+      $wantSub = if ($null -eq $body.subAll) { $true } else { [bool]$body.subAll }
+      if (-not $wantSub) { $dlArgs += '--skip-subtitle' }
+      else { $dlArgs += @('--skip-ai', 'false') }
 
       # File naming
       if ($body.filePattern) { $dlArgs += @('-F', $body.filePattern) }
@@ -345,10 +372,17 @@ public class BBWin32Window : NativeWindow {}
       if ($body.cookie) { $dlArgs += @('-c', $body.cookie) }
       if ($body.language) { $dlArgs += @('--language', $body.language) }
       if ($body.delayPerPage) { $dlArgs += @('--delay-per-page', $body.delayPerPage) }
-      if ($body.videoAscending) { $dlArgs += '--video-ascending' }
       if ($body.audioAscending) { $dlArgs += '--audio-ascending' }
-      if ($body.allowPcdn) { $dlArgs += '--allow-pcdn' }
+      # 部分 CDN 不支持多线程，提示语里 BBDown 要求关掉多线程重试
+      if ($body.noMultiThread) { $dlArgs += @('--multi-thread', 'false') }
       if ($body.saveArchives) { $dlArgs += '--save-archives-to-file' }
+
+      # 文件基线：BBDown 混流成功后会把临时目录整个删掉，已下到的字幕/封面会被连带删除，
+      # 故只能靠「主流程结束后是否多出文件」来判断到底有没有留下
+      $filesBefore = @(Get-ChildItem $script:downloadDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+      $imgExts = @('.jpg', '.jpeg', '.png', '.webp', '.gif')
+      # 封面：前端在"仅封面"以外的模式一律显式传 skipCover，避免沿用开关状态
+      $wantCover = -not $body.skipCover
 
       $sw = sse-start $ctx
       $q = $dlArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
@@ -356,6 +390,8 @@ public class BBWin32Window : NativeWindow {}
       $pinfo = New-Object System.Diagnostics.ProcessStartInfo
       $pinfo.FileName = $bbdown; $pinfo.Arguments = [string]::Join(' ', $q)
       $pinfo.WorkingDirectory = $workDir; $pinfo.RedirectStandardOutput = $true; $pinfo.RedirectStandardError = $true
+      # -ia 要读 stdin：必须重定向并自己写，否则子进程读到 EOF 会死循环重问
+      if ($useIa) { $pinfo.RedirectStandardInput = $true }
       $pinfo.UseShellExecute = $false; $pinfo.CreateNoWindow = $true
       $enc = [Text.Encoding]::GetEncoding('gb2312')
       $pinfo.StandardOutputEncoding = $enc; $pinfo.StandardErrorEncoding = $enc
@@ -376,6 +412,8 @@ public class BBWin32Window : NativeWindow {}
         $outEOF = $false; $errEOF = $false
         $pending = ''
         $idle = 0
+        # -ia 交互：$seen 累计已打印的输出，供选流时定位序号；$ansV/$ansA 记录各答了几次
+        $seen = ''; $ansV = 0; $ansA = 0
         while ($true) {
           $gotData = $false
           if (-not $outEOF -and $outTask.IsCompleted) {
@@ -391,7 +429,23 @@ public class BBWin32Window : NativeWindow {}
           $lines = $pending -split "\r?\n|\r"
           if ($lines.Count -gt 1) {
             $pending = $lines[-1]
-            for ($i = 0; $i -lt $lines.Count - 1; $i++) { send-bbdown-line $sw $lines[$i] }
+            for ($i = 0; $i -lt $lines.Count - 1; $i++) { send-bbdown-line $sw $lines[$i]; $seen += $lines[$i] + "`n" }
+          }
+          # -ia 的提示行没有换行符（Console.Write），会一直卡在 $pending 里，故在此单独识别。
+          # 序号由刚打印出的候选列表反查，答错时 BBDown 会重问，最多重答 100 次防死循环
+          if ($useIa -and -not $proc.HasExited -and $pending -match '选择一条(视频|音频)流\(输入序号\)') {
+            $isV = $pending -match '视频流'
+            $asked = if ($isV) { $ansV } else { $ansA }
+            if ($asked -lt 100) {
+              if ($isV) { $ansV++ } else { $ansA++ }
+              if ($isV) { $idx = ia-pick-video $seen $body.dfnPriority $body.encodingPriority }
+              else { $idx = ia-pick-audio $seen $body.audioBitrate $body.audioSize $body.audioAscending }
+              # 提示行带 `[时间戳] - ` 前缀且无换行，连同前缀一起抹掉，免得和下一条日志粘成一行
+              $pending = $pending -replace '(\[[^\]]*\] - )?请选择一条(视频|音频)流\(输入序号\)[:：]?\s*', ''
+              sse-send $sw 'status' @{ msg="选择$(if ($isV) { '视频' } else { '音频' })流 → 序号 $idx" }
+              $proc.StandardInput.WriteLine($idx)
+              $proc.StandardInput.Flush()
+            }
           }
           if ($proc.HasExited) {
             if (-not $gotData) { $idle++ } else { $idle = 0 }
@@ -412,6 +466,55 @@ public class BBWin32Window : NativeWindow {}
         }
         $proc.WaitForExit()
         if ($pending.Trim()) { send-bbdown-line $sw $pending }
+        # === 字幕 / 封面补跑 ===
+        # BBDown 混流成功后会删除整个临时目录，字幕和封面即便已下载也会被连带删掉，
+        # 只有 --sub-only / --cover-only / --skip-mux 才留得住。故主下载完没见到新文件时单独补跑。
+        if ($proc.ExitCode -eq 0 -and -not $body.subOnly -and -not $body.danmakuOnly -and -not $body.coverOnly) {
+          # 已有同类文件就别补跑：锚点是最近改动的音视频文件所在目录（即本次视频的标题文件夹）。
+          # 不能按"本次新写入的文件"判断——重复下载时 BBDown 不重写旧文件，会一个都找不到而白跑重试。
+          $hasSrt = $false; $hasImg = $false
+          $anchor = Get-ChildItem $script:downloadDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { @('.mp4', '.flv', '.mkv', '.m4a', '.mp3') -contains $_.Extension.ToLower() } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if ($anchor) {
+            $d = $anchor.DirectoryName
+            $hasSrt = @(Get-ChildItem $d -File -Filter *.srt -ErrorAction SilentlyContinue).Count -gt 0
+            $hasImg = @(Get-ChildItem $d -File -ErrorAction SilentlyContinue | Where-Object { $imgExts -contains $_.Extension.ToLower() }).Count -gt 0
+          }
+
+          $extraArgs = @()
+          if ($body.apiMode -eq 'tv') { $extraArgs += '--use-tv-api' } elseif ($body.apiMode -eq 'app') { $extraArgs += '--use-app-api' }
+          if ($body.filePattern) { $extraArgs += @('-F', $body.filePattern) }
+          if ($body.multiFilePattern) { $extraArgs += @('-M', $body.multiFilePattern) }
+          if ($body.selectPage) { $extraArgs += @('-p', $body.selectPage) }
+          if ($body.userAgent) { $extraArgs += @('-ua', $body.userAgent) }
+          if ($body.cookie) { $extraArgs += @('-c', $body.cookie) }
+
+          if ($wantSub -and -not $hasSrt) {
+            $subArgs = @($body.url, '--work-dir', $script:downloadDir, '--ffmpeg-path', $ffmpeg, '--sub-only', '--skip-ai', 'false') + $extraArgs
+            $newSrt = @(new-files $script:downloadDir $filesBefore @('.srt'))
+            # BBDown 抓字幕本身约五成成功率，失败时一个错都不报，只能重试
+            for ($try = 1; $try -le 4 -and $newSrt.Count -eq 0; $try++) {
+              sse-send $sw 'status' @{ msg="补下字幕 (第 $try 次)..." }
+              run-bbdown @subArgs | Out-Null
+              $newSrt = @(new-files $script:downloadDir $filesBefore @('.srt'))
+            }
+            if ($newSrt.Count -gt 0) { sse-send $sw 'status' @{ msg="字幕补下成功：$($newSrt.Count) 个" } }
+            else { sse-send $sw 'status' @{ msg='本次没抓到字幕（BBDown 抓字幕约五成成功率），可稍后用「仅字幕」模式重试' } }
+          }
+
+          if ($wantCover -and -not $hasImg) {
+            $coverArgs = @($body.url, '--work-dir', $script:downloadDir, '--ffmpeg-path', $ffmpeg, '--cover-only') + $extraArgs
+            $newImg = @(new-files $script:downloadDir $filesBefore $imgExts)
+            for ($try = 1; $try -le 3 -and $newImg.Count -eq 0; $try++) {
+              sse-send $sw 'status' @{ msg="补下封面 (第 $try 次)..." }
+              run-bbdown @coverArgs | Out-Null
+              $newImg = @(new-files $script:downloadDir $filesBefore $imgExts)
+            }
+            if ($newImg.Count -gt 0) { sse-send $sw 'status' @{ msg="封面补下成功：$($newImg.Count) 个" } }
+            else { sse-send $sw 'status' @{ msg='封面补下失败，可稍后用「仅封面」模式重试' } }
+          }
+        }
         if ($proc.ExitCode -eq 0) { sse-send $sw 'done' @{ success=$true } } else { sse-send $sw 'error' @{ msg="exit: $($proc.ExitCode)" } }
         $sw.Close(); $ctx.Response.Close()
       } catch {
@@ -424,7 +527,7 @@ public class BBWin32Window : NativeWindow {}
     }
     # GET /api/files
     if ($method -eq 'GET' -and $path -eq '/api/files') {
-      $files = Get-ChildItem $script:downloadDir -Recurse -File | ? { $_.Extension -match '\.(mp4|flv|mkv|m4a|mp3|ass|xml)$' } | Sort LastWriteTime -Desc | % {
+      $files = Get-ChildItem $script:downloadDir -Recurse -File | ? { $_.Extension -match '\.(mp4|flv|mkv|m4a|mp3|ass|srt|xml|jpg|jpeg|png|webp|gif)$' } | Sort LastWriteTime -Desc | % {
         $rel = $_.FullName.Substring(([IO.Path]::GetFullPath($script:downloadDir)).Length).TrimStart('\','/')
         @{ name=$rel; size=$_.Length; mtime=$_.LastWriteTime.ToString('o') }
       }
@@ -442,7 +545,10 @@ public class BBWin32Window : NativeWindow {}
       if ($req.QueryString['view'] -eq '1') {
         if ($fname -match '\.(mp4|flv|mkv)$') { $ctx.Response.ContentType = 'video/mp4' }
         elseif ($fname -match '\.(mp3|m4a)$') { $ctx.Response.ContentType = 'audio/mp4' }
-        elseif ($fname -match '\.(ass|xml)$') { $ctx.Response.ContentType = 'text/plain; charset=utf-8' }
+        elseif ($fname -match '\.(ass|srt|xml)$') { $ctx.Response.ContentType = 'text/plain; charset=utf-8' }
+        elseif ($fname -match '\.jpe?g$') { $ctx.Response.ContentType = 'image/jpeg' }
+        elseif ($fname -match '\.png$') { $ctx.Response.ContentType = 'image/png' }
+        elseif ($fname -match '\.(webp|gif)$') { $ctx.Response.ContentType = "image/$($Matches[1])" }
         else { $ctx.Response.ContentType = 'application/octet-stream' }
       } else {
         $ctx.Response.ContentType = "application/octet-stream"
