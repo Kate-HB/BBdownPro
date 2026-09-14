@@ -68,7 +68,15 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 .adv-toggle:hover{color:#79c0ff}
 .adv-panel{border:1px solid #30363d;border-radius:6px;padding:12px;margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .adv-panel .full{grid-column:1/-1}
-.adv-panel label{font-size:12px;color:#8b949e;display:block;margin-bottom:2px}
+.adv-panel label{font-size:12px;color:#8b949e;display:block;margin-bottom:0}
+/* 参数名下面固定两行说明，各行输入框就能横向对齐；说明都控制在两行内，超了会撑高整行 */
+.adv-hint{font-size:11px;line-height:1.5;color:#6e7681;font-weight:400;min-height:33px;margin:1px 0 4px}
+/* 勾选项的说明比一条勾选文字还长，横排会挤成长条，改成两列、说明缩进到文字下面 */
+#advPanel .check-row{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px}
+#advPanel .check-label{display:grid;grid-template-columns:auto 1fr;column-gap:6px;align-items:center;align-content:start}
+#advPanel .check-label input{grid-area:1/1}
+#advPanel .check-label .ck-name{grid-area:1/2}
+#advPanel .check-label .adv-hint{grid-area:2/2;margin:1px 0 0}
 .adv-panel input[type="text"],.adv-panel input[type="number"]{padding:5px 8px;font-size:12px}
 
 /* file list */
@@ -82,6 +90,7 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 .ext-audio{background:#1a2a3a;color:#79c0ff}
 .ext-sub{background:#3a2a1a;color:#d2a66e}
 .ext-other{background:#1a1a2a;color:#8b949e}
+.ext-img{background:#2a1a3a;color:#d2a9ff}
 
 /* login */
 #qrWrap{text-align:center;padding:10px}
@@ -92,6 +101,15 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 #loginBar .dot.ok{background:#238636}
 #loginBar .dot.no{background:#da3633}
 
+/* player */
+#playerWrap{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+#playerWrap.hidden{display:none}
+#playerStage{position:relative;line-height:0}
+#playerVideo{display:block;max-width:90vw;max-height:74vh;background:#000}
+#dmCanvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+#playerBar{display:flex;align-items:center;gap:14px;margin-top:12px;color:#c9d1d9;font-size:13px;flex-wrap:wrap;justify-content:center}
+#playerName{max-width:40vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e}
+
 .hidden{display:none}
 .check-label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 .check-label input{width:auto}
@@ -99,6 +117,8 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 
 .single-choice-group {display: flex;gap: 20px;align-items: center;}
 .single-choice-group label {display: inline-flex;align-items: center;gap: 6px;cursor: pointer;}
+/* .check-row 的 display:flex 排在 .hidden 之后，同权重会盖掉 .hidden，故按 ID 补一条 */
+#extraOpts.hidden{display:none}
 </style>
 </head>
 <body>
@@ -112,7 +132,6 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
     <span class="dot no" id="loginDot"></span>
     <span id="loginText" style="font-size:13px">未登录</span>
     <button class="btn-sm btn-primary" id="btnLogin" style="margin-left:auto">扫码登录</button>
-    <button class="btn-sm btn-outline" id="btnLoginTv">TV登录</button>
     <button class="btn-sm btn-danger hidden" id="btnCancelLogin">取消</button>
   </div>
   <div id="qrWrap" class="hidden">
@@ -140,7 +159,6 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
       <option value="">WEB</option>
       <option value="tv">TV</option>
       <option value="app">APP</option>
-      <option value="intl">INTL</option>
     </select>
     <button class="btn-primary" id="btnParse">解析</button>
   </div>
@@ -179,6 +197,8 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
   <!-- extra options -->
   <div id="extraOpts" class="check-row">
     <label class="check-label"><input type="checkbox" id="danmaku"> 同时下载弹幕</label>
+    <label class="check-label"><input type="checkbox" id="subAll" checked> 同时下载字幕(人工+AI)</label>
+    <label class="check-label"><input type="checkbox" id="dlCover" checked> 同时下载封面</label>
   </div>
 
   <!-- advanced toggle -->
@@ -186,36 +206,39 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
   <div class="adv-panel hidden" id="advPanel">
     <div>
       <label>文件名模板</label>
+      <div class="adv-hint">单个视频的输出文件名，可用 &lt;videoTitle&gt; 等变量</div>
       <input type="text" id="filePattern" placeholder="&lt;videoTitle&gt;">
     </div>
     <div>
       <label>多P文件名模板</label>
+      <div class="adv-hint">多P视频各分P的命名规则，&lt;pageNumberWithZero&gt; 是补零分P号</div>
       <input type="text" id="multiFilePattern" placeholder="&lt;videoTitle&gt;/[P&lt;pageNumberWithZero&gt;]&lt;pageTitle&gt;">
     </div>
     <div>
       <label>语言代码 (如 chi, jpn)</label>
+      <div class="adv-hint">只下指定语言的字幕，留空则全部下载</div>
       <input type="text" id="language" placeholder="默认">
     </div>
     <div>
       <label>分P下载间隔 (秒)</label>
+      <div class="adv-hint">多P之间等待的秒数，填 1~3 可降低被限流概率</div>
       <input type="number" id="delayPerPage" value="0" min="0" style="width:100px">
     </div>
     <div>
       <label>User-Agent</label>
+      <div class="adv-hint">留空则随机；登录态异常时可填自己的浏览器 UA</div>
       <input type="text" id="userAgent" placeholder="随机UA">
     </div>
     <div>
       <label>Cookie 字符串</label>
+      <div class="adv-hint">不想扫码时，从浏览器复制含 SESSDATA 的整串填入</div>
       <input type="text" id="cookie" placeholder="手动填入cookie">
     </div>
-    <div class="full check-row" style="gap:12px">
-      <label class="check-label"><input type="checkbox" id="videoAsc"> 视频升序(最小优先)</label>
-      <label class="check-label"><input type="checkbox" id="audioAsc"> 音频升序(最小优先)</label>
-      <label class="check-label"><input type="checkbox" id="skipMux"> 跳过混流</label>
-      <label class="check-label"><input type="checkbox" id="skipSub"> 跳过字幕</label>
-      <label class="check-label"><input type="checkbox" id="skipCover"> 跳过封面</label>
-      <label class="check-label"><input type="checkbox" id="allowPcdn"> 允许PCDN</label>
-      <label class="check-label"><input type="checkbox" id="saveArchives"> 存档记录(跳过重复)</label>
+    <div class="full check-row">
+      <label class="check-label"><input type="checkbox" id="audioAsc"><span class="ck-name">音频升序(最小优先)</span><span class="adv-hint">自动改选体积最小的音频，勾上时忽略上面点的那条</span></label>
+      <label class="check-label"><input type="checkbox" id="skipMux"><span class="ck-name">跳过混流</span><span class="adv-hint">保留分离的音频和视频，不合并成一个文件</span></label>
+      <label class="check-label"><input type="checkbox" id="noMultiThread"><span class="ck-name">关闭多线程</span><span class="adv-hint">报"不支持多线程下载"时勾选，改用单线程</span></label>
+      <label class="check-label"><input type="checkbox" id="saveArchives"><span class="ck-name">存档记录(跳过重复)</span><span class="adv-hint">记下已下载的视频，重复下载时自动跳过</span></label>
     </div>
 
     <div class="full single-choice-group">
@@ -263,6 +286,20 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
   <div id="fileList">加载中...</div>
 </div>
 
+<!-- ===== PLAYER ===== -->
+<div id="playerWrap" class="hidden">
+  <div id="playerStage">
+    <video id="playerVideo" controls></video>
+    <canvas id="dmCanvas"></canvas>
+  </div>
+  <div id="playerBar">
+    <span id="playerName"></span>
+    <label class="check-label"><input type="checkbox" id="dmOn" checked> 显示弹幕</label>
+    <span id="dmInfo"></span>
+    <button class="btn-sm btn-outline" id="playerClose">关闭</button>
+  </div>
+</div>
+
 <script src="qrcode.min.js"></script>
 <script>
 const $ = s => document.querySelector(s)
@@ -271,7 +308,8 @@ const $$ = s => document.querySelectorAll(s)
 let videoInfo = null
 let selVideoIdx = null
 let selAudioIdx = null
-let loginPoll = null, loginType = 'web'
+let loginPoll = null
+let allFiles = []
 
 // ========== LOGIN ==========
 async function checkLogin() {
@@ -293,29 +331,24 @@ async function checkLogin() {
   } catch (_) { return {} }
 }
 
-function startLogin(type) {
+function startLogin() {
   return async () => {
-    loginType = type
-    $('#btnLogin').disabled = true; $('#btnLoginTv').disabled = true
-    $('#btnLogin').textContent = '生成中...'; $('#btnLoginTv').textContent = '生成中...'
+    $('#btnLogin').disabled = true
+    $('#btnLogin').textContent = '生成中...'
     $('#qrWrap').classList.remove('hidden')
     $('#qrImg').src = ''
 
     try {
-      const r = await fetch('/api/login/start', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type}) })
+      const r = await fetch('/api/login/start', { method: 'POST' })
       const d = await r.json()
-      if (d.ok) {
-        if (d.type === 'web' && d.qrcodeUrl) {
-          const qr = qrcode(0, 'M')
-          qr.addData(d.qrcodeUrl)
-          qr.make()
-          $('#qrImg').src = qr.createDataURL(4, 4)
-        } else {
-          $('#qrImg').src = '/api/qrcode?t=' + Date.now()
-        }
+      if (d.ok && d.qrcodeUrl) {
+        const qr = qrcode(0, 'M')
+        qr.addData(d.qrcodeUrl)
+        qr.make()
+        $('#qrImg').src = qr.createDataURL(4, 4)
         $('#loginText').textContent = '等待扫码...'
         $('#btnCancelLogin').classList.remove('hidden')
-        $('#btnLogin').classList.add('hidden'); $('#btnLoginTv').classList.add('hidden')
+        $('#btnLogin').classList.add('hidden')
 
         const poll = setInterval(async () => {
           const s = await checkLogin()
@@ -341,13 +374,12 @@ function startLogin(type) {
 function endLoginUI() {
   $('#qrWrap').classList.add('hidden')
   $('#btnCancelLogin').classList.add('hidden')
-  $('#btnLogin').classList.remove('hidden'); $('#btnLoginTv').classList.remove('hidden')
-  $('#btnLogin').disabled = false; $('#btnLoginTv').disabled = false
-  $('#btnLogin').textContent = '扫码登录'; $('#btnLoginTv').textContent = 'TV登录'
+  $('#btnLogin').classList.remove('hidden')
+  $('#btnLogin').disabled = false
+  $('#btnLogin').textContent = '扫码登录'
 }
 
-$('#btnLogin').onclick = startLogin('web')
-$('#btnLoginTv').onclick = startLogin('tv')
+$('#btnLogin').onclick = startLogin()
 
 $('#btnCancelLogin').onclick = () => {
   const poll = $('#btnCancelLogin').dataset.pollId
@@ -391,7 +423,7 @@ function renderMeta(d) {
 }
 
 function renderPages(d) {
-  if (d.pages.length <= 1) { $('#pageSelector').classList.add('hidden'); return }
+  if (d.pages.length <= 1) { $('#pageSelector').classList.add('hidden'); $('#pageChecks').innerHTML = ''; return }
   $('#pageSelector').classList.remove('hidden')
   $('#pageChecks').innerHTML = d.pages.map(p => `
     <label class="page-chip checked"><input type="checkbox" value="${p.index}" checked>P${p.index} ${esc(p.title)}</label>
@@ -423,13 +455,25 @@ function renderStreams(d) {
     $$('#audioStreams .stream-item').forEach(e => e.classList.remove('selected'))
     el.classList.add('selected'); selAudioIdx = +el.dataset.idx
   })
+  syncAudioAsc()
   updateDlMode()
+}
+
+// 勾了"音频升序"就自动选中体积最小的那条音频，免得界面高亮和实际下载对不上
+function syncAudioAsc() {
+  if (!$('#audioAsc').checked || !videoInfo || !videoInfo.audioStreams.length) return
+  const list = videoInfo.audioStreams
+  let best = 0
+  list.forEach((s, i) => { if (parseSizeStr(s.size) < parseSizeStr(list[best].size)) best = i })
+  selAudioIdx = best
+  $$('#audioStreams .stream-item').forEach((e, i) => e.classList.toggle('selected', i === best))
 }
 
 function fps(v) { return v === Math.floor(v) ? v.toString() : v.toFixed(3) }
 
 // ========== DOWNLOAD MODE ==========
 $('#modeRow').onchange = updateDlMode
+$('#audioAsc').onchange = syncAudioAsc
 
 function updateDlMode() {
   const mode = $$('input[name="dlMode"]:checked')[0]?.value || ''
@@ -441,13 +485,11 @@ function updateDlMode() {
 
   $('#videoSection').classList.toggle('hidden', !needVideo)
   $('#audioSection').classList.toggle('hidden', !needAudio)
-  $('#extraOpts').classList.toggle('hidden', mode !== '' && mode !== 'video' && mode !== 'audio')
+  // 附加内容(弹幕/字幕/封面)只在"视频+音频"模式下出现
+  $('#extraOpts').classList.toggle('hidden', mode !== '')
 
-  // Conflict handling
-  $('#skipSub').disabled = (mode === 'sub')
-  if (mode === 'sub') $('#skipSub').checked = false
-  $('#skipCover').disabled = (mode === 'cover')
-  if (mode === 'cover') $('#skipCover').checked = false
+  // 仅字幕模式勾上字幕（提交时不看这个框，但切回"视频+音频"时界面要对得上）
+  if (mode === 'sub') $('#subAll').checked = true
 }
 
 // ========== ADVANCED TOGGLE ==========
@@ -480,13 +522,17 @@ $('#btnDownload').onclick = async () => {
     coverOnly: mode === 'cover' || undefined,
     dfnPriority: vs?.quality || undefined,
     encodingPriority: vs?.codec || undefined,
-    downloadDanmaku: $('#danmaku').checked || undefined,
+    // 音频流没有画质参数，只能靠 -ia 交互模式按序号指定，故把码率和体积一并传给后端反查序号
+    audioBitrate: as?.bitrate || undefined,
+    audioSize: as?.size || undefined,
+    // 附加内容三项只在"视频+音频"模式生效，其他模式（含"仅字幕"）一律按模式自身的语义走
+    downloadDanmaku: (mode === '' && $('#danmaku').checked) || undefined,
     skipMux: $('#skipMux').checked || undefined,
-    skipSubtitle: $('#skipSub').checked || undefined,
-    skipCover: $('#skipCover').checked || undefined,
-    videoAscending: $('#videoAsc').checked || undefined,
+    subAll: mode === '' ? $('#subAll').checked : (mode === 'sub'),
+    // 封面只在"视频+音频"跟随开关；"仅封面"必须不跳过；其余模式一律跳过（开关此时不可见）
+    skipCover: (mode === 'cover' || (mode === '' && $('#dlCover').checked)) ? undefined : true,
     audioAscending: $('#audioAsc').checked || undefined,
-    allowPcdn: $('#allowPcdn').checked || undefined,
+    noMultiThread: $('#noMultiThread').checked || undefined,
     saveArchives: $('#saveArchives').checked || undefined,
     filePattern: $('#filePattern').value.trim() || '<videoTitle>/<pageTitle>',
     multiFilePattern: $('#multiFilePattern').value.trim() || '<videoTitle>/[P<pageNumberWithZero>]<pageTitle>',
@@ -498,10 +544,16 @@ $('#btnDownload').onclick = async () => {
   }
 
   // page selection
-  const selPages = [...$$('#pageChecks input:checked')].map(c => c.value)
   const totalPages = videoInfo.pages.length
-  if (selPages.length > 0 && selPages.length < totalPages) {
-    body.selectPage = selPages.join(',')
+  if (totalPages > 1) {
+    const selPages = [...$$('#pageChecks input:checked')].map(c => c.value)
+    if (selPages.length === 0) {
+      alert('请至少选择一集')
+      $('#btnDownload').disabled = false; $('#dlStatus').textContent = ''
+      return
+    }
+    // 全选集必须显式传 ALL：不传 -p 时 BBDown 对番剧只下第一集
+    body.selectPage = selPages.length === totalPages ? 'ALL' : selPages.join(',')
   }
 
   // clean undefined values
@@ -562,21 +614,29 @@ $('#btnDownload').onclick = async () => {
 async function loadFiles() {
   try {
     const files = await (await fetch('/api/files')).json()
+    allFiles = files
     $('#fileList').innerHTML = files.length === 0
       ? '<div style="color:#8b949e;font-size:13px">暂无文件</div>'
       : files.map(f => {
           let tag = '', ext = f.name.split('.').pop().toLowerCase()
           if (/^(mp4|flv|mkv)$/.test(ext)) tag = '<span class="ext-tag ext-video">视频</span>'
           else if (/^(m4a|mp3)$/.test(ext)) tag = '<span class="ext-tag ext-audio">音频</span>'
-          else if (ext === 'ass') tag = '<span class="ext-tag ext-sub">字幕</span>'
-          else if (ext === 'xml') tag = '<span class="ext-tag ext-other">弹幕</span>'
+          else if (ext === 'srt') tag = '<span class="ext-tag ext-sub">字幕</span>'
+          // .ass 在本项目里只可能是「导出ASS」的产物（BBDown 字幕一律 .srt），归到弹幕一类
+          else if (ext === 'ass' || ext === 'xml') tag = '<span class="ext-tag ext-other">弹幕</span>'
+          else if (/^(jpg|jpeg|png|webp|gif)$/.test(ext)) tag = '<span class="ext-tag ext-img">封面</span>'
           let actions = ''
-          if (/^(mp4|flv|mkv|m4a|mp3)$/.test(ext)) actions += `<a href="/api/file/${encodeURIComponent(f.name)}?view=1" target="_blank">播放</a>`
-          else if (ext === 'ass' || ext === 'xml') actions += `<a href="/api/file/${encodeURIComponent(f.name)}?view=1" target="_blank">查看</a>`
+          if (/^(mp4|flv|mkv|m4a|mp3)$/.test(ext)) actions += `<a href="#" class="btn-play" data-fn="${esc(f.name)}">播放</a>`
+          else if (ext === 'ass' || ext === 'xml' || ext === 'srt' || /^(jpg|jpeg|png|webp|gif)$/.test(ext)) actions += `<a href="/api/file/${encodeURIComponent(f.name)}?view=1" target="_blank">查看</a>`
+          if (ext === 'xml') actions += `<a href="#" class="btn-ass" data-fn="${esc(f.name)}">导出ASS</a>`
           actions += `<a href="/api/file/${encodeURIComponent(f.name)}">下载</a>`
           actions += `<a href="#" class="btn-del" data-fn="${esc(f.name)}" style="color:#f85149">删除</a>`
           return `<div class="file-row">${tag}<span class="fn">${esc(f.name)}</span><span class="sz">${fmtSize(f.size)}</span>${actions}</div>`
         }).join('')
+    // bind play
+    $$('.btn-play').forEach(b => b.onclick = e => { e.preventDefault(); openPlayer(b.dataset.fn) })
+    // bind ass export
+    $$('.btn-ass').forEach(b => b.onclick = e => { e.preventDefault(); exportAss(b.dataset.fn) })
     // bind delete
     $$('.btn-del').forEach(b => b.onclick = async e => {
       e.preventDefault()
@@ -651,6 +711,187 @@ $('#btnBrowse').onclick = async () => {
     }
   } catch (e) { $('#dirStatus').textContent = '选择失败: ' + e.message }
 }
+
+// ========== PLAYER WITH DANMAKU ==========
+// BBDown 下的是 B站 XML 弹幕(<d p="时间,模式,字号,颜色,...">)，播放器不认，
+// 这里在页面内自己解析并叠加渲染，覆盖在 <video> 上。
+const dmCvs = $('#dmCanvas'), dmCtx = dmCvs.getContext('2d')
+let dmList = [], dmIdx = 0, dmActive = [], dmLanes = [], dmLaneCount = 1, dmDpr = 1
+const DM_SCROLL = 8, DM_FIX = 4   // 滚动弹幕存活秒数 / 顶部底部固定秒数
+
+function dmColor(c) { return '#' + ((c || 16777215) & 0xffffff).toString(16).padStart(6, '0') }
+
+function parseDanmaku(text) {
+  const doc = new DOMParser().parseFromString(text, 'text/xml')
+  return [...doc.querySelectorAll('d')].map(el => {
+    const p = (el.getAttribute('p') || '').split(',')
+    return { t: parseFloat(p[0]), mode: parseInt(p[1], 10), size: parseInt(p[2], 10), color: parseInt(p[3], 10), text: el.textContent }
+  }).filter(d => isFinite(d.t) && d.text).sort((a, b) => a.t - b.t)
+}
+
+// XML 弹幕 -> ASS。ASS 只是容器格式，内容是弹幕；转出来给 PotPlayer 这类只认字幕格式的播放器加载
+function danmakuToAss(list) {
+  const W = 1920, H = 1080, FONT = 40, SCROLL = 8, FIX = 4, LANE_H = 44, MAX_LANE = 22
+  const dmEsc = s => String(s).replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}').replace(/[\r\n]+/g, ' ')
+  const assColor = c => {
+    const v = (c || 16777215) & 0xffffff
+    return '&H00' + [v & 255, (v >> 8) & 255, (v >> 16) & 255].map(x => x.toString(16).padStart(2, '0').toUpperCase()).join('')
+  }
+  const ts = t => {
+    t = Math.max(0, t)
+    const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60
+    return `${h}:${String(m).padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`
+  }
+  // 粗略估宽：CJK/全角按 1em，其余按 0.5em
+  const estWidth = s => { let w = 0; for (const ch of s) w += /[\u2E80-\uFFFD]/.test(ch) ? 1 : 0.5; return w * FONT }
+
+  const scrollFree = new Array(MAX_LANE).fill(0), topFree = new Array(MAX_LANE).fill(0), botFree = new Array(MAX_LANE).fill(0)
+  const pick = (arr, t) => { for (let i = 0; i < MAX_LANE; i++) if (arr[i] <= t) return i; return -1 }
+
+  const out = [
+    '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${W}`, `PlayResY: ${H}`,
+    'WrapStyle: 2', 'ScaledBorderAndShadow: yes', '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: DM,Microsoft YaHei,${FONT},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,1,7,0,0,0,1`, '',
+    '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+  ]
+  for (const d of list) {
+    const col = `\\c${assColor(d.color)}`
+    const txt = dmEsc(d.text)
+    if (d.mode === 5 || d.mode === 4) {                     // 顶部 / 底部固定
+      const free = d.mode === 5 ? topFree : botFree
+      const l = pick(free, d.t); if (l < 0) continue
+      free[l] = d.t + FIX
+      const an = d.mode === 5 ? '\\an8' : '\\an2'
+      const y = d.mode === 5 ? 10 + l * LANE_H : H - 10 - l * LANE_H
+      out.push(`Dialogue: 0,${ts(d.t)},${ts(d.t + FIX)},DM,,0,0,0,,{${an}\\pos(${W / 2},${y})${col}}${txt}`)
+    } else {                                                 // 滚动 1/2/3
+      const l = pick(scrollFree, d.t); if (l < 0) continue
+      const w = estWidth(d.text)
+      scrollFree[l] = d.t + (w / (W + w)) * SCROLL + 0.2
+      const y = 10 + l * LANE_H
+      out.push(`Dialogue: 0,${ts(d.t)},${ts(d.t + SCROLL)},DM,,0,0,0,,{\\an7\\move(${W},${y},${-Math.round(w)},${y})${col}}${txt}`)
+    }
+  }
+  return out.join('\r\n')
+}
+
+async function exportAss(name) {
+  try {
+    const txt = await (await fetch('/api/file/' + encodeURIComponent(name) + '?view=1')).text()
+    const list = parseDanmaku(txt)
+    if (!list.length) { alert('没解析到弹幕'); return }
+    const blob = new Blob(['\ufeff' + danmakuToAss(list)], { type: 'text/plain;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = name.split(/[\\/]/).pop().replace(/\.xml$/i, '') + '.ass'
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+  } catch (e) { alert('导出失败: ' + e.message) }
+}
+
+function dmResize() {
+  const v = $('#playerVideo')
+  if (!v.videoWidth) return
+  dmDpr = window.devicePixelRatio || 1
+  dmCvs.width = v.clientWidth * dmDpr
+  dmCvs.height = v.clientHeight * dmDpr
+  dmCtx.setTransform(dmDpr, 0, 0, dmDpr, 0, 0)
+  dmLaneCount = Math.max(1, Math.floor(v.clientHeight / 30))
+  dmLanes = new Array(dmLaneCount).fill(0)
+}
+
+function dmPickLane(t) {
+  for (let i = 0; i < dmLaneCount; i++) if (dmLanes[i] <= t) return i
+  return -1
+}
+
+function dmSeek() {
+  const v = $('#playerVideo'), t = v.currentTime
+  dmIdx = dmList.findIndex(d => d.t >= t)
+  if (dmIdx < 0) dmIdx = dmList.length
+  dmActive = []
+  dmLanes = new Array(dmLaneCount).fill(0)
+}
+
+function dmFrame() {
+  requestAnimationFrame(dmFrame)
+  if ($('#playerWrap').classList.contains('hidden')) return
+  const v = $('#playerVideo')
+  if (!v.videoWidth) return
+  if (dmCvs.width !== Math.floor(v.clientWidth * dmDpr)) dmResize()
+  const W = v.clientWidth, H = v.clientHeight, t = v.currentTime
+  dmCtx.clearRect(0, 0, W, H)
+  if (!$('#dmOn').checked) return
+
+  // 补充进入时间轴的弹幕
+  while (dmIdx < dmList.length && dmList[dmIdx].t <= t) {
+    const d = dmList[dmIdx++]
+    if (t - d.t > 1) continue                       // seek 后丢弃早已过期的
+    const fixed = d.mode === 4 || d.mode === 5
+    const lane = dmPickLane(t)
+    if (lane < 0) continue
+    dmCtx.font = `${d.size || 25}px sans-serif`
+    const w = dmCtx.measureText(d.text).width
+    const dur = fixed ? DM_FIX : DM_SCROLL
+    // 滚动弹幕等队尾完全进场后才释放该行
+    dmLanes[lane] = t + (fixed ? dur : (w / (W + w)) * dur) + 0.2
+    dmActive.push({ ...d, lane, w, dur, fixed })
+  }
+
+  dmCtx.textBaseline = 'top'
+  dmCtx.lineWidth = 2
+  dmCtx.strokeStyle = 'rgba(0,0,0,.8)'
+  dmActive = dmActive.filter(d => {
+    const gone = t - d.t > d.dur
+    if (gone) return false
+    const y = d.fixed
+      ? (d.mode === 5 ? d.lane * 30 + 4 : H - (d.lane + 1) * 30 - 4)
+      : d.lane * 30 + 4
+    const prog = (t - d.t) / d.dur
+    const x = d.fixed ? (W - d.w) / 2 : W - (W + d.w) * prog
+    dmCtx.font = `${d.size || 25}px sans-serif`
+    dmCtx.fillStyle = dmColor(d.color)
+    dmCtx.strokeText(d.text, x, y)
+    dmCtx.fillText(d.text, x, y)
+    return true
+  })
+}
+
+async function openPlayer(name) {
+  const v = $('#playerVideo')
+  const base = name.replace(/\.[^.]+$/, '')
+  // 同名 .xml 即该视频的弹幕
+  const xmlFile = allFiles.find(f => /\.xml$/i.test(f.name) && f.name.replace(/\.[^.]+$/, '') === base)
+  dmList = []; dmIdx = 0; dmActive = []
+  if (xmlFile) {
+    try {
+      const txt = await (await fetch('/api/file/' + encodeURIComponent(xmlFile.name) + '?view=1')).text()
+      dmList = parseDanmaku(txt)
+    } catch (_) {}
+  }
+  $('#dmInfo').textContent = dmList.length ? dmList.length + ' 条弹幕' : '无同名弹幕文件'
+  $('#playerName').textContent = name
+  $('#playerWrap').classList.remove('hidden')
+  v.src = '/api/file/' + encodeURIComponent(name) + '?view=1'
+  v.play().catch(() => {})
+  dmResize()
+}
+
+function closePlayer() {
+  const v = $('#playerVideo')
+  v.pause(); v.removeAttribute('src'); v.load()
+  $('#playerWrap').classList.add('hidden')
+  dmList = []; dmActive = []; dmIdx = 0
+}
+
+$('#playerClose').onclick = closePlayer
+$('#playerWrap').onclick = e => { if (e.target === $('#playerWrap')) closePlayer() }
+$('#playerVideo').onseeked = dmSeek
+$('#playerVideo').onloadedmetadata = dmResize
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePlayer() })
+dmFrame()
 
 // ========== INIT ==========
 $('#url').onkeydown = e => { if (e.key === 'Enter') $('#btnParse').click() }
