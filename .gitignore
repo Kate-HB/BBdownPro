@@ -4,6 +4,7 @@ config.json
 qrcode.png
 qrcode_url.txt
 login-status.txt
+dl-error.log
 
 # 调试临时文件
 _t*.ps1

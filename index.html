@@ -114,6 +114,9 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 .check-label{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
 .check-label input{width:auto}
 .check-row{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+
+.single-choice-group {display: flex;gap: 20px;align-items: center;}
+.single-choice-group label {display: inline-flex;align-items: center;gap: 6px;cursor: pointer;}
 /* .check-row 的 display:flex 排在 .hidden 之后，同权重会盖掉 .hidden，故按 ID 补一条 */
 #extraOpts.hidden{display:none}
 </style>
@@ -236,6 +239,35 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
       <label class="check-label"><input type="checkbox" id="skipMux"><span class="ck-name">跳过混流</span><span class="adv-hint">保留分离的音频和视频，不合并成一个文件</span></label>
       <label class="check-label"><input type="checkbox" id="noMultiThread"><span class="ck-name">关闭多线程</span><span class="adv-hint">报"不支持多线程下载"时勾选，改用单线程</span></label>
       <label class="check-label"><input type="checkbox" id="saveArchives"><span class="ck-name">存档记录(跳过重复)</span><span class="adv-hint">记下已下载的视频，重复下载时自动跳过</span></label>
+    </div>
+
+    <div class="full single-choice-group">
+      <span id="formatting-tip" style="font-size:12px;color:#8b949e">下载后的格式转换</span>
+
+      <label>
+        <input type="radio" name="format" value="none" checked>
+        不转换
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="mp3">
+        MP3
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="flac">
+        FLAC
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="ogg">
+        OGG
+      </label>
+
+      <label>
+        <input type="radio" name="format" value="mov">
+        MOV
+      </label>
     </div>
   </div>
 
@@ -507,7 +539,8 @@ $('#btnDownload').onclick = async () => {
     language: $('#language').value.trim() || undefined,
     delayPerPage: +$('#delayPerPage').value || undefined,
     userAgent: $('#userAgent').value.trim() || undefined,
-    cookie: $('#cookie').value.trim() || undefined
+    cookie: $('#cookie').value.trim() || undefined,
+    formatting: document.querySelector("input[name=format]:checked").value
   }
 
   // page selection

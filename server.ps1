@@ -164,6 +164,46 @@ function send-bbdown-line($sw, $line) {
   else { sse-send $sw 'log' @{ msg=$t } }
 }
 
+function convert-format {
+  param (
+    [string] $format,
+    [System.IO.DirectoryInfo] $dir
+  )
+  
+  # 要转换的源扩展名
+  $sourceExts = @('mp4', 'm4a')
+  
+  # 递归查找文件
+  $files = Get-ChildItem -LiteralPath $Dir -Recurse -File | Where-Object {
+      $sourceExts -contains $_.Extension.TrimStart('.').ToLower() -and $_.Name -like '*.raw*'
+  }
+  
+  foreach ($file in $files) {
+      $index++
+      $targetPath = [System.IO.Path]::ChangeExtension($file.FullName, $Format).Replace('.raw', '')
+  
+      # 调用 ffmpeg，若不转换则直接复制
+      if ($format -eq "none") {
+        Copy-Item -Path $file.FullName -Destination $file.FullName.Replace('.raw', '')
+      } else {
+        & $ffmpeg -hide_banner -loglevel error -y -i $file.FullName $targetPath
+      
+        if ($LASTEXITCODE -ne 0) {
+          # 清理可能产生的不完整输出
+          if ((Test-Path -LiteralPath $targetPath) -and ($targetPath -ne $file.FullName)) {
+            Remove-Item -LiteralPath $targetPath -Force -ErrorAction SilentlyContinue
+          }
+          continue
+        }
+      }
+  
+      # 转换成功，删除原文件
+      if ($targetPath -ne $file.FullName) {
+          Remove-Item -LiteralPath $file.FullName -Force
+      }
+  }
+}
+
 # -- login state --
 $script:loginProc = $null
 
@@ -361,7 +401,8 @@ public class BBWin32Window : NativeWindow {}
       else { $dlArgs += @('--skip-ai', 'false') }
 
       # File naming
-      if ($body.filePattern) { $dlArgs += @('-F', $body.filePattern) }
+      if ($body.filePattern) { $dlArgs += @('-F', "$($body.filePattern).raw") }
+      else {$dlArgs += @('-F', '<videoTitle>.raw')}
       if ($body.multiFilePattern) { $dlArgs += @('-M', $body.multiFilePattern) }
 
       # Page selection
@@ -465,6 +506,9 @@ public class BBWin32Window : NativeWindow {}
           Start-Sleep -Milliseconds 100
         }
         $proc.WaitForExit()
+        if ($body.formatting -ne 'none') {sse-send $sw "正在转换格式..."}
+        # 转换格式
+        convert-format -format $body.formatting -dir $script:downloadDir
         if ($pending.Trim()) { send-bbdown-line $sw $pending }
         # === 字幕 / 封面补跑 ===
         # BBDown 混流成功后会删除整个临时目录，字幕和封面即便已下载也会被连带删掉，
