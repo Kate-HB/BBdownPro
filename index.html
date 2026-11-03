@@ -33,9 +33,11 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
 #meta .sub{color:#8b949e;font-size:12px}
 
 .stream-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+#videoStreams,#audioStreams{display:flex;flex-direction:column;gap:10px}
 .stream-item{border:1px solid #30363d;border-radius:6px;padding:10px;cursor:pointer;transition:.15s}
 .stream-item:hover{border-color:#58a6ff}
 .stream-item.selected{border-color:#238636;background:#0d2818}
+.stream-note{font-size:11px;color:#8b949e;margin-bottom:6px}
 .stream-item .q{font-weight:600;font-size:13px;color:#fff}
 .stream-item .d{font-size:11px;color:#8b949e;margin-top:2px}
 
@@ -185,13 +187,13 @@ button{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight
   <!-- video streams -->
   <div id="videoSection" style="margin-top:12px">
     <div class="section-label">视频画质 & 编码</div>
-    <div id="videoStreams" class="stream-grid"></div>
+    <div id="videoStreams"></div>
   </div>
 
   <!-- audio streams -->
   <div id="audioSection" style="margin-top:12px">
     <div class="section-label">音频质量</div>
-    <div id="audioStreams" class="stream-grid"></div>
+    <div id="audioStreams"></div>
   </div>
 
   <!-- extra options -->
@@ -306,8 +308,8 @@ const $ = s => document.querySelector(s)
 const $$ = s => document.querySelectorAll(s)
 
 let videoInfo = null
-let selVideoIdx = null
-let selAudioIdx = null
+let selVideo = null   // 选中的视频流对象（画质+编码会套用到所有分P）
+let selAudio = null   // 选中的音频流对象（码率+体积会套用到所有分P）
 let loginPoll = null
 let allFiles = []
 
@@ -434,29 +436,54 @@ function renderPages(d) {
 }
 
 function renderStreams(d) {
-  selVideoIdx = d.videoStreams.length > 0 ? 0 : null
-  selAudioIdx = d.audioStreams.length > 0 ? 0 : null
-  $('#videoStreams').innerHTML = d.videoStreams.map((s, i) => `
-    <div class="stream-item ${i===0?'selected':''}" data-idx="${i}" data-type="video">
+  // 多P时各集规格基本一致，去重后只显示一套，选择套用到全部 P（与官方合集一致）
+  const dedupe = (list, key) => {
+    const seen = new Set(), out = []
+    list.forEach(s => { const k = key(s); if (!seen.has(k)) { seen.add(k); out.push(s) } })
+    return out
+  }
+  const vrank = c => ({ AVC: 0, AV1: 1, HEVC: 2 }[c] ?? 9)
+  const vs = dedupe(d.videoStreams, s => s.quality + '|' + s.codec)
+                .sort((x, y) => y.height - x.height || vrank(x.codec) - vrank(y.codec) || y.bitrate - x.bitrate)
+  const as = dedupe(d.audioStreams, s => s.bitrate).sort((x, y) => y.bitrate - x.bitrate)
+
+  selVideo = vs.length ? vs[0] : null
+  selAudio = as.length ? as[0] : null
+
+  const multi = (d.pages || []).length > 1
+  const note = multi
+    ? `<div class="stream-note">画质选项取自第 1 集，套用于全部 ${d.pages.length} 个分P；个别分P缺少该规格时自动降级</div>` : ''
+
+  $('#videoStreams').innerHTML = note + `<div class="stream-grid">${vs.map(s => `
+    <div class="stream-item" data-type="video">
       <div class="q">${esc(s.quality)}</div>
-      <div class="d">${s.width}x${s.height} · ${s.codec} · ${fps(s.fps)}</div>
+      <div class="d">${s.width}x${s.height} · ${esc(s.codec)} · ${fps(s.fps)}</div>
       <div class="d">${s.bitrate}kbps · ${esc(s.size)}</div>
-    </div>`).join('')
-  $('#audioStreams').innerHTML = d.audioStreams.map((s, i) => `
-    <div class="stream-item ${i===0?'selected':''}" data-idx="${i}" data-type="audio">
+    </div>`).join('')}</div>`
+  $('#audioStreams').innerHTML = `<div class="stream-grid">${as.map(s => `
+    <div class="stream-item" data-type="audio">
       <div class="q">M4A</div>
       <div class="d">${s.bitrate} kbps · ${esc(s.size)}</div>
-    </div>`).join('')
-  $$('#videoStreams .stream-item').forEach(el => el.onclick = () => {
-    $$('#videoStreams .stream-item').forEach(e => e.classList.remove('selected'))
-    el.classList.add('selected'); selVideoIdx = +el.dataset.idx
+    </div>`).join('')}</div>`
+
+  $$('#videoStreams .stream-item').forEach((el, i) => {
+    el._stream = vs[i]
+    el.onclick = () => { selVideo = vs[i]; applySelection() }
   })
-  $$('#audioStreams .stream-item').forEach(el => el.onclick = () => {
-    $$('#audioStreams .stream-item').forEach(e => e.classList.remove('selected'))
-    el.classList.add('selected'); selAudioIdx = +el.dataset.idx
+  $$('#audioStreams .stream-item').forEach((el, i) => {
+    el._stream = as[i]
+    el.onclick = () => { selAudio = as[i]; applySelection() }
   })
+  applySelection()
   syncAudioAsc()
   updateDlMode()
+}
+
+function applySelection() {
+  $$('#videoStreams .stream-item').forEach(el => el.classList.toggle('selected',
+    !!selVideo && el._stream.quality === selVideo.quality && el._stream.codec === selVideo.codec))
+  $$('#audioStreams .stream-item').forEach(el => el.classList.toggle('selected',
+    !!selAudio && el._stream.bitrate === selAudio.bitrate))
 }
 
 // 勾了"音频升序"就自动选中体积最小的那条音频，免得界面高亮和实际下载对不上
@@ -465,8 +492,8 @@ function syncAudioAsc() {
   const list = videoInfo.audioStreams
   let best = 0
   list.forEach((s, i) => { if (parseSizeStr(s.size) < parseSizeStr(list[best].size)) best = i })
-  selAudioIdx = best
-  $$('#audioStreams .stream-item').forEach((e, i) => e.classList.toggle('selected', i === best))
+  selAudio = list[best]
+  applySelection()
 }
 
 function fps(v) { return v === Math.floor(v) ? v.toString() : v.toFixed(3) }
@@ -508,8 +535,8 @@ $('#btnDownload').onclick = async () => {
   $('#progressWrap').classList.remove('hidden'); $('#log').classList.remove('hidden')
   $('#log').innerHTML = ''; $('#progressFill').style.width = '0%'; $('#progressFill').classList.remove('indeterminate')
 
-  const vs = selVideoIdx !== null ? videoInfo.videoStreams[selVideoIdx] : null
-  const as = selAudioIdx !== null ? videoInfo.audioStreams[selAudioIdx] : null
+  const vs = selVideo
+  const as = selAudio
   const mode = $$('input[name="dlMode"]:checked')[0]?.value || ''
 
   const body = {
@@ -668,12 +695,15 @@ function parseSizeStr(s) {
 function estTotalBytes() {
   if (!videoInfo) return 0
   const mode = $$('input[name="dlMode"]:checked')[0]?.value || ''
-  const vs = selVideoIdx != null ? videoInfo.videoStreams[selVideoIdx] : null
-  const as = selAudioIdx != null ? videoInfo.audioStreams[selAudioIdx] : null
+  const vs = selVideo
+  const as = selAudio
   let t = 0
   if ((mode === '' || mode === 'video') && vs) t += parseSizeStr(vs.size)
   if ((mode === '' || mode === 'audio') && as) t += parseSizeStr(as.size)
-  return t
+  // 多P时后端的 bytes 是全部集的累计体积，总量按选中集数放大（用第1集体积近似）
+  const n = videoInfo.pages && videoInfo.pages.length > 1
+    ? ($$('#pageChecks input:checked').length || 1) : 1
+  return t * n
 }
 function esc(s) { return s ? s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '' }
 
