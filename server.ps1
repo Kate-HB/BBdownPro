@@ -74,17 +74,68 @@ function new-files($dir, $before, $exts) {
     Where-Object { $exts -contains $_.Extension.ToLower() -and $before -notcontains $_.FullName })
 }
 
+# 勾选不连续的分P时 BBDown 仍按原始 P 号命名（如 P3、P5），下载结束后按勾选顺序重排成连续的 [P01][P02]…
+# 只处理本次新增的文件（含字幕/封面/弹幕）；文件名里带 [Pnn] 才改，自定义模板去掉了页码的会跳过。
+function renumber-pages($before, $selectPage) {
+  if (-not $selectPage -or $selectPage -eq 'ALL') { return 0 }
+  $pages = @($selectPage -split ',' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+  if ($pages.Count -eq 0) { return 0 }
+  $map = @{}
+  for ($i = 0; $i -lt $pages.Count; $i++) { $map[[string]$pages[$i]] = $i + 1 }
+
+  $items = @(Get-ChildItem $script:downloadDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $before -notcontains $_.FullName } |
+    ForEach-Object {
+      $m = [regex]::Match($_.Name, '\[P(\d+)\]')
+      if ($m.Success) { @{ file=$_; orig=[int]$m.Groups[1].Value } }
+    })
+  # 有新增文件但一个 [Pnn] 都没有，说明自定义模板去掉了页码，返回 -1 让上层提示
+  if ($items.Count -eq 0) {
+    $anyNew = @(Get-ChildItem $script:downloadDir -Recurse -File -ErrorAction SilentlyContinue |
+      Where-Object { $before -notcontains $_.FullName }).Count
+    if ($anyNew -gt 0) { return -1 }
+    return 0
+  }
+  # 按原始 P 号升序改名，避免目标名被尚未改名的文件占用
+  $changed = 0
+  foreach ($it in ($items | Sort-Object { $_.orig })) {
+    if (-not $map.ContainsKey([string]$it.orig)) { continue }
+    $tag = '[P{0:00}]' -f $map[[string]$it.orig]
+    $newName = $it.file.Name -replace '\[P\d+\]', $tag
+    if ($newName -eq $it.file.Name) { continue }
+    $dst = Join-Path $it.file.DirectoryName $newName
+    if (Test-Path -LiteralPath $dst) { continue }
+    Rename-Item -LiteralPath $it.file.FullName -NewName $newName -ErrorAction SilentlyContinue
+    $changed++
+  }
+  return $changed
+}
+
 function dir-size($path) {
   if (-not (Test-Path $path)) { return 0 }
   $s = (Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
   if (-not $s) { return 0 } else { return [long]$s }
 }
 
+# BBDown 1.6.3 认不出新版空间合集/系列链接（/lists/<id>?type=season|series），
+# 会误判成"用户全部投稿"直接报不支持。统一转成它认识的旧版链接再交给它。
+function normalize-url($u) {
+  if ($u -match 'space\.bilibili\.com/(\d+)/lists/(\d+)') {
+    $mid = $Matches[1]; $id = $Matches[2]
+    if ($u -match 'type=series') { return "https://space.bilibili.com/$mid/channel/seriesdetail?sid=$id" }
+    return "https://space.bilibili.com/$mid/channel/collectiondetail?sid=$id"
+  }
+  return $u
+}
+
 # -- parse BBDown -info output --
 function parse-info($stdout) {
   $result = @{ title=''; upHome=''; date=''; pages=@(); videoStreams=@(); audioStreams=@() }
+  # BBDown 对每个分P各打印一份流列表，靠"开始解析P<n>"切分，流才能标上归属
+  $curPage = 0
   foreach ($line in ($stdout -split "\r?\n")) {
     $t = $line.Trim()
+    if ($t -match '开始解析P(\d+)') { $curPage = [int]$Matches[1] }
     if ($t -match '视频标题:\s*(.+)$') { $result.title = $Matches[1].Trim() }
     if ($t -match 'UP主页:\s*(.+)$') { $result.upHome = $Matches[1].Trim() }
     if ($t -match '发布时间:\s*(.+)$') { $result.date = $Matches[1].Trim() }
@@ -92,10 +143,14 @@ function parse-info($stdout) {
       $result.pages += @{ index=[int]$Matches[1]; cid=$Matches[2]; title=$Matches[3]; duration=$Matches[4] }
     }
     if ($t -match '^(\d+)\.\s*\[(.+?)\]\s*\[(\d+)x(\d+)\]\s*\[(.+?)\]\s*\[([\d.]+)\]\s*\[(\d+)\s*kbps\]\s*\[~(.+?)\]') {
-      $result.videoStreams += @{ index=[int]$Matches[1]; quality=$Matches[2]; width=[int]$Matches[3]; height=[int]$Matches[4]; codec=$Matches[5]; fps=[double]$Matches[6]; bitrate=[int]$Matches[7]; size=$Matches[8] }
+      $result.videoStreams += @{ index=[int]$Matches[1]; page=$curPage; quality=$Matches[2]; width=[int]$Matches[3]; height=[int]$Matches[4]; codec=$Matches[5]; fps=[double]$Matches[6]; bitrate=[int]$Matches[7]; size=$Matches[8] }
     }
     if ($t -match '^(\d+)\.\s*\[M4A\]\s*\[(\d+)\s*kbps\]\s*\[~(.+?)\]') {
-      $result.audioStreams += @{ index=[int]$Matches[1]; format='M4A'; bitrate=[int]$Matches[2]; size=$Matches[3] }
+      $idx = [int]$Matches[1]; $b = [int]$Matches[2]; $sz = $Matches[3]
+      # 同一分P内码率+体积完全相同的音频是不同编码规格，界面无法区分，只留一条
+      if (-not ($result.audioStreams | Where-Object { $_.page -eq $curPage -and $_.bitrate -eq $b -and $_.size -eq $sz })) {
+        $result.audioStreams += @{ index=$idx; page=$curPage; format='M4A'; bitrate=$b; size=$sz }
+      }
     }
   }
   return $result
@@ -350,12 +405,14 @@ public class BBWin32Window : NativeWindow {}
     if ($method -eq 'POST' -and $path -eq '/api/info') {
       $body = read-body $ctx
       if (-not $body.url) { json $ctx @{ error='Missing url' } 400; continue }
+      $body.url = normalize-url $body.url
+      # -p 1 只解析第1集的流：分P列表照样全列出，但避免大合集逐集解析 playurl（几十集会卡很久）
       if ($body.apiMode -eq 'tv') {
-        $result = run-bbdown $body.url '-info' '--show-all' '--use-tv-api'
+        $result = run-bbdown $body.url '-info' '--show-all' '-p' '1' '--use-tv-api'
       } elseif ($body.apiMode -eq 'app') {
-        $result = run-bbdown $body.url '-info' '--show-all' '--use-app-api'
+        $result = run-bbdown $body.url '-info' '--show-all' '-p' '1' '--use-app-api'
       } else {
-        $result = run-bbdown $body.url '-info' '--show-all'
+        $result = run-bbdown $body.url '-info' '--show-all' '-p' '1'
       }
       if ($result.code -ne 0) { json $ctx @{ error=($result.stderr, $result.stdout, "cmd: $($result.cmd)", "exit: $($result.code)" | ? {$_} | Select -First 1) } 500; continue }
       $info = parse-info $result.stdout
@@ -366,6 +423,7 @@ public class BBWin32Window : NativeWindow {}
     if ($method -eq 'POST' -and $path -eq '/api/download') {
       $body = read-body $ctx
       if (-not $body.url) { json $ctx @{ error='Missing url' } 400; continue }
+      $body.url = normalize-url $body.url
       $dlArgs = @($body.url, '--work-dir', $script:downloadDir, '--ffmpeg-path', $ffmpeg)
 
       # API mode
@@ -559,7 +617,12 @@ public class BBWin32Window : NativeWindow {}
             else { sse-send $sw 'status' @{ msg='封面补下失败，可稍后用「仅封面」模式重试' } }
           }
         }
-        if ($proc.ExitCode -eq 0) { sse-send $sw 'done' @{ success=$true } } else { sse-send $sw 'error' @{ msg="exit: $($proc.ExitCode)" } }
+        if ($proc.ExitCode -eq 0) {
+          $renamed = renumber-pages $filesBefore $body.selectPage
+          if ($renamed -eq -1) { sse-send $sw 'status' @{ msg='文件名里没有 [Pnn] 页码标记，已跳过重命名' } }
+          elseif ($renamed -gt 0) { sse-send $sw 'status' @{ msg="已按勾选顺序重命名 $renamed 个文件" } }
+          sse-send $sw 'done' @{ success=$true }
+        } else { sse-send $sw 'error' @{ msg="exit: $($proc.ExitCode)" } }
         $sw.Close(); $ctx.Response.Close()
       } catch {
         try { $_.Exception.ToString() | Out-File (Join-Path $workDir 'dl-error.log') -Append } catch {}
